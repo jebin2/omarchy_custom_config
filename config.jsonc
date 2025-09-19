@@ -32,6 +32,6 @@
     "exec": "bash -c 'prev=\"\"; while true; do title=$(hyprctl activewindow | awk -F\": \" \"/title:/ {print \\$2}\"); title=\"${title:-No window}\"; if [[ \"$title\" != \"$prev\" ]]; then echo \"$title\" | cut -c1-50; prev=\"$title\"; fi; sleep 0.5; done'",
     "interval": 0,
     "format": "{}",
-    "on-click": "omarchy-launch-floating-terminal '~/git/omarchy_custom_config/show_all_windows.sh'"
+    "on-click": "omarchy-launch-floating-terminal '~/git/omarchy_custom_config/HyprlandWindowSwitcher/target/release/hypr_window_switcher'"
   }
 }
