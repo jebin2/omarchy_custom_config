@@ -466,11 +466,15 @@ fn main() -> Result<(), io::Error> {
                         }
                         KeyCode::Enter => {
                             if let Some(win) = app.windows.get(app.selected_index) {
+                                // Use output() instead of spawn() to wait for completion
                                 let _ = Command::new("hyprctl")
                                     .arg("dispatch")
                                     .arg("focuswindow")
                                     .arg(format!("address:{}", win.id))
-                                    .spawn();
+                                    .output();
+                                
+                                // Small delay to ensure focus change takes effect
+                                std::thread::sleep(std::time::Duration::from_millis(50));
                             }
                             app.running = false;
                         }
@@ -494,11 +498,15 @@ fn main() -> Result<(), io::Error> {
                     }
                     MouseEventKind::Down(MouseButton::Left) => {
                         if let Some(win) = app.windows.get(app.selected_index) {
+                            // Use output() instead of spawn() to wait for completion
                             let _ = Command::new("hyprctl")
                                 .arg("dispatch")
                                 .arg("focuswindow")
                                 .arg(format!("address:{}", win.id))
-                                .spawn();
+                                .output();
+                            
+                            // Small delay to ensure focus change takes effect
+                            std::thread::sleep(std::time::Duration::from_millis(50));
                         }
                         app.running = false;
                     }
