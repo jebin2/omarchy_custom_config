@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Windows 11 VM
+Comment=Starts the Windows 11 virtual machine
+Exec=/home/jebin/.config/hypr/start-windows11.sh
+Icon=/home/jebin/.local/share/icons/windows11.png
+Terminal=false
+Categories=System;Emulator;

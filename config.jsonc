@@ -1,0 +1,37 @@
+{
+  "modules-left": ["custom/window-title"],
+  "modules-right": [
+    "custom/ports",
+    "custom/gpu_memory",
+    "memory"
+  ],
+  "clock": {
+    "format": "{:%A %d %B %Y %H:%M}",
+    "tooltip": false,
+    "on-click":"omarchy-launch-floating-terminal '/home/jebin/git/omarchy_custom_config/clock/target/release/clock'",
+    "on-click-right": "omarchy-cmd-tzupdate"
+  },
+  "memory": {
+    "interval": 5,
+    "format": "RAM: {used:0.1f}G/{total:0.1f}G  ",
+  },
+  "custom/gpu_memory": {
+    "exec": "~/git/omarchy_custom_config/vram.sh",
+    "interval": 5,
+    "on-click": "omarchy-launch-floating-terminal '~/git/omarchy_custom_config/show_nvidia.sh'"
+  },
+  "custom/ports": {
+    "exec": "~/git/omarchy_custom_config/ports.sh",
+    "interval": 5,
+    "return-type": "plain",
+    "format": "{}",
+    "on-click": "omarchy-launch-floating-terminal '~/git/omarchy_custom_config/show_ports.sh'",
+    "tooltip": false
+  },
+  "custom/window-title": {
+    "exec": "bash -c 'prev=\"\"; while true; do title=$(hyprctl activewindow | awk -F\": \" \"/title:/ {print \\$2}\"); title=\"${title:-No window}\"; if [[ \"$title\" != \"$prev\" ]]; then echo \"$title\" | cut -c1-50; prev=\"$title\"; fi; sleep 0.5; done'",
+    "interval": 0,
+    "format": "{}",
+    "on-click": "omarchy-launch-floating-terminal '~/git/omarchy_custom_config/show_all_windows.sh'"
+  }
+}
