@@ -38,6 +38,7 @@ struct Theme {
     accent: Color,
     border_selected: Color,
     border_normal: Color,
+    error: Color,
 }
 
 impl Theme {
@@ -53,6 +54,7 @@ impl Theme {
             accent: Color::Rgb(80, 250, 123),        // Bright green for secondary accents
             border_selected: Color::Rgb(255, 121, 198),// Striking pink for selected borders
             border_normal: Color::Rgb(98, 114, 164),   // Subdued border color
+            error: Color::Rgb(255, 85, 85),          // Red for close/error actions
         }
     }
 }
@@ -193,6 +195,47 @@ impl App {
         
         (optimal_cols, cell_width, text_width)
     }
+
+    fn close_selected_window(&mut self) {
+        if let Some(win) = self.windows.get(self.selected_index) {
+            let _ = Command::new("hyprctl")
+                .arg("dispatch")
+                .arg("closewindow")
+                .arg(format!("address:{}", win.id))
+                .output();
+            
+            // Remove the window from our list
+            self.windows.remove(self.selected_index);
+            
+            // Adjust selection if needed
+            if self.selected_index >= self.windows.len() && !self.windows.is_empty() {
+                self.selected_index = self.windows.len() - 1;
+            }
+            
+            // Exit if no windows left
+            if self.windows.is_empty() {
+                self.running = false;
+            }
+        }
+    }
+
+    fn refresh_windows(&mut self) {
+        let old_selected_id = self.windows.get(self.selected_index).map(|w| w.id.clone());
+        self.windows = get_windows();
+        
+        // Try to maintain selection on the same window
+        if let Some(old_id) = old_selected_id {
+            if let Some(new_index) = self.windows.iter().position(|w| w.id == old_id) {
+                self.selected_index = new_index;
+            } else if self.selected_index >= self.windows.len() && !self.windows.is_empty() {
+                self.selected_index = self.windows.len() - 1;
+            }
+        }
+        
+        if self.windows.is_empty() {
+            self.running = false;
+        }
+    }
 }
 
 fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &App) {
@@ -208,7 +251,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &App) {
         ]),
         Line::from(vec![Span::styled(
             format!(
-                "Found {} windows • Use ←→↑↓ or mouse • Enter/Click to focus • q to quit",
+                "Found {} windows • Use ←→↑↓ or mouse • Enter/Click: focus • Del/x: close • r: refresh • q: quit",
                 app.windows.len()
             ),
             Style::default().fg(app.theme.on_surface).add_modifier(Modifier::DIM),
@@ -231,7 +274,7 @@ fn render_windows(frame: &mut ratatui::Frame, area: Rect, app: &App) {
     let (cols, _, text_width) = app.calculate_optimal_layout(area.width);
     let rows = (windows.len() + cols - 1) / cols;
 
-    let cell_height = 9; // Enough for icon + class + title + workspace
+    let cell_height = 10; // Increased height to accommodate close button indicator
     let row_chunks = Layout::vertical(
         (0..rows)
             .map(|_| Constraint::Length(cell_height))
@@ -297,10 +340,17 @@ fn render_windows(frame: &mut ratatui::Frame, area: Rect, app: &App) {
             .collect();
 
         let mut lines = Vec::new();
-        // First line: icon only
-        lines.push(Line::from(vec![
-            Span::styled(format!("{} ", icon), Style::default().fg(app.theme.primary)),
-        ]));
+        // First line: icon and close indicator
+        if is_selected {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} ", icon), Style::default().fg(app.theme.primary)),
+                Span::styled("󰅖 Del/x to close", Style::default().fg(app.theme.error).add_modifier(Modifier::DIM)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} ", icon), Style::default().fg(app.theme.primary)),
+            ]));
+        }
         lines.extend(wrapped_class);
         lines.extend(wrapped_title);
         lines.push(Line::from(Span::styled(
@@ -324,7 +374,7 @@ fn hit_test(app: &App, mx: u16, my: u16, area: Rect) -> Option<usize> {
 
     let row_chunks = Layout::vertical(
         (0..rows)
-            .map(|_| Constraint::Length(9)) // same as cell_height
+            .map(|_| Constraint::Length(10)) // same as cell_height
             .collect::<Vec<_>>(),
     )
     .split(area);
@@ -424,6 +474,12 @@ fn main() -> Result<(), io::Error> {
                             }
                             app.running = false;
                         }
+                        KeyCode::Delete | KeyCode::Char('x') => {
+                            app.close_selected_window();
+                        }
+                        KeyCode::Char('r') => {
+                            app.refresh_windows();
+                        }
                         KeyCode::Char('q') => app.running = false,
                         _ => {}
                     }
@@ -445,6 +501,10 @@ fn main() -> Result<(), io::Error> {
                                 .spawn();
                         }
                         app.running = false;
+                    }
+                    MouseEventKind::Down(MouseButton::Right) => {
+                        // Right-click to close window
+                        app.close_selected_window();
                     }
                     _ => {}
                 },
