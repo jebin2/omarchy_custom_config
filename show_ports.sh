@@ -80,4 +80,4 @@ show_ports() {
     }'
 }
 
-show_ports
+show_ports; omarchy-show-done
