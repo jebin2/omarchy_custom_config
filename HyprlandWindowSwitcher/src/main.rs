@@ -35,25 +35,24 @@ struct Theme {
     primary: Color,
     on_background: Color,
     on_surface: Color,
-    on_primary: Color,
     accent: Color,
     border_selected: Color,
     border_normal: Color,
 }
 
 impl Theme {
-    fn tokyo_night() -> Self {
+    // Dracula theme for a more attractive and visible UI
+    fn dracula() -> Self {
         Theme {
-            background: Color::Rgb(26, 27, 38),
-            surface: Color::Rgb(36, 40, 59),
-            surface_variant: Color::Rgb(52, 59, 88),
-            primary: Color::Rgb(125, 207, 255),
-            on_background: Color::Rgb(192, 202, 245),
-            on_surface: Color::Rgb(169, 177, 214),
-            on_primary: Color::Rgb(26, 27, 38),
-            accent: Color::Rgb(158, 206, 106),
-            border_selected: Color::Rgb(125, 207, 255),
-            border_normal: Color::Rgb(65, 72, 104),
+            background: Color::Rgb(40, 42, 54),      // Dark background
+            surface: Color::Rgb(68, 71, 90),         // Lighter background for UI elements
+            surface_variant: Color::Rgb(98, 114, 164), // A lighter shade for selected items
+            primary: Color::Rgb(189, 147, 249),      // Vibrant purple for primary accents
+            on_background: Color::Rgb(248, 248, 242),  // Bright foreground for text
+            on_surface: Color::Rgb(248, 248, 242),     // Bright foreground for text on surfaces
+            accent: Color::Rgb(80, 250, 123),        // Bright green for secondary accents
+            border_selected: Color::Rgb(255, 121, 198),// Striking pink for selected borders
+            border_normal: Color::Rgb(98, 114, 164),   // Subdued border color
         }
     }
 }
@@ -63,10 +62,10 @@ fn wrap_text(text: &str, width: usize, max_lines: usize) -> Vec<String> {
     if width == 0 {
         return vec![String::new()];
     }
-    
+
     let mut lines = Vec::new();
     let mut current_line = String::new();
-    
+
     for word in text.split_whitespace() {
         if word.len() > width {
             // Handle very long words by splitting them
@@ -77,7 +76,7 @@ fn wrap_text(text: &str, width: usize, max_lines: usize) -> Vec<String> {
                     break;
                 }
             }
-            
+
             let mut remaining = word;
             while !remaining.is_empty() && lines.len() < max_lines {
                 let chunk_size = width.min(remaining.len());
@@ -100,15 +99,15 @@ fn wrap_text(text: &str, width: usize, max_lines: usize) -> Vec<String> {
             current_line.push_str(word);
         }
     }
-    
+
     if !current_line.is_empty() && lines.len() < max_lines {
         lines.push(current_line);
     }
-    
+
     if lines.is_empty() {
         lines.push(String::new());
     }
-    
+
     lines
 }
 
@@ -148,7 +147,7 @@ impl App {
             running: true,
             windows: get_windows(),
             selected_index: 0,
-            theme: Theme::tokyo_night(),
+            theme: Theme::dracula(),
         }
     }
 
@@ -281,7 +280,7 @@ fn render_windows(frame: &mut ratatui::Frame, area: Rect, app: &App) {
                 Line::from(Span::styled(
                     line,
                     Style::default()
-                        .fg(if is_selected { app.theme.on_primary } else { app.theme.on_surface })
+                        .fg(if is_selected { app.theme.on_background } else { app.theme.on_surface })
                         .add_modifier(Modifier::BOLD),
                 ))
             })
@@ -292,7 +291,7 @@ fn render_windows(frame: &mut ratatui::Frame, area: Rect, app: &App) {
             .map(|line| {
                 Line::from(Span::styled(
                     line,
-                    Style::default().fg(app.theme.on_surface).add_modifier(Modifier::DIM),
+                    Style::default().fg(app.theme.on_surface),
                 ))
             })
             .collect();
