@@ -2,7 +2,7 @@
 
 # Check if Tailscale is connected
 if tailscale status &>/dev/null; then
-  echo "🔗 Tailscale  " # connected icon
+  echo "┇┇┇  " #᎒᎒᎒ connected icon
 else
-  echo "❌ Tailscale  " # disconnected icon
+  echo "𓃑  " #𝗓ᶻ disconnected icon
 fi
