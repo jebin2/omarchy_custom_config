@@ -1,12 +1,32 @@
 #!/bin/bash
 
-# Path to your CSV
 CHEAT_FILE="/home/jebin/git/omarchy_custom_config/cheatsheet/cheatsheet.csv"
 CONFIG_FILE="/home/jebin/git/omarchy_custom_config/config.toml"
 
-# Parse cheatsheet and display in walker menu
+# Ensure Gemini toggle exists in config
+grep -q '^SEARCH_WITH_GEMINI=' "$CONFIG_FILE" || echo 'SEARCH_WITH_GEMINI="false"' >> "$CONFIG_FILE"
+
+# Read current GEMINI toggle
+SEARCH_WITH_GEMINI=$(awk -F= '/SEARCH_WITH_GEMINI/ {gsub(/[" ]/,"",$2); print $2}' "$CONFIG_FILE")
+
+# Prepare first two rows with proper alignment
+COPY_ALL_ROW="$(printf "%-35s → %s" "Copy all cheat" "Copy all cheats to clipboard")"
+
+if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
+    GEMINI_ROW="$(printf "%-35s → %s" "[✓] Search with Gemini API" "Run Gemini search")"
+else
+    GEMINI_ROW="$(printf "%-35s → %s" "[ ] Search with Gemini API" "Run Gemini search")"
+fi
+
+# Parse cheatsheet and build menu
 parse_cheats() {
-    awk -F, '
+    awk -F, -v copy_row="$COPY_ALL_ROW" -v gemini_row="$GEMINI_ROW" '
+    BEGIN {
+        # Firdt row: Gemini toggle
+        # print gemini_row
+        # Second row: Copy all cheats
+        print copy_row
+    }
     {
         key = $1
         desc = $2
@@ -14,34 +34,37 @@ parse_cheats() {
     }' "$CHEAT_FILE"
 }
 
-# Adjust menu height (40% of focused monitor)
+# Adjust menu height (40%)
 monitor_height=$(hyprctl monitors -j | jq -r '.[] | select(.focused==true) | .height')
 menu_height=$((monitor_height * 40 / 100))
 
 # Show menu
 selection=$(parse_cheats | walker --dmenu --theme keybindings -p 'Cheatsheet' -w 800 -h "$menu_height")
 
-# Exit if nothing selected
 [ -z "$selection" ] && exit
 
-# Check if first row (Copy all cheat)
+# Handle first row: Copy all cheats
 if [[ "$selection" =~ ^Copy\ all\ cheat ]]; then
-    # Copy the entire CSV
     wl-copy < "$CHEAT_FILE"
     notify-send "Cheatsheet" "All cheats copied to clipboard ✅"
-else
-    # Copy only the command (first column before comma)
-    command=$(awk -F, -v sel="$selection" '
-        BEGIN {cmd=""}
-        $1 ~ sel {cmd=$1; exit}
-        END {print cmd}' "$CHEAT_FILE")
-
-    # Fallback: if awk fails, extract first part before → 
-    if [ -z "$command" ]; then
-        command=$(echo "$selection" | awk -F'→' '{print $1}' | xargs)
-    fi
-
-    # Copy command
-    wl-copy <<< "$command"
-    notify-send "Cheatsheet" "Command copied: $command ✅"
+    exit
 fi
+
+# Handle second row: Gemini toggle
+if [[ "$selection" =~ "Search with Gemini API" ]]; then
+    if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
+        sed -i 's/SEARCH_WITH_GEMINI *= *.*/SEARCH_WITH_GEMINI="false"/' "$CONFIG_FILE"
+        notify-send "Cheatsheet" "Gemini search disabled ✅"
+    else
+        sed -i 's/SEARCH_WITH_GEMINI *= *.*/SEARCH_WITH_GEMINI="true"/' "$CONFIG_FILE"
+        notify-send "Cheatsheet" "Gemini search enabled ✅"
+    fi
+    # Rerun menu to reflect updated tick
+    exec "$0"
+fi
+
+# Handle all other rows: copy command (first column)
+command=$(awk -F, -v sel="$selection" '$1 ~ sel {print $1; exit}' "$CHEAT_FILE")
+[ -z "$command" ] && command=$(echo "$selection" | awk -F'→' '{print $1}' | xargs)
+wl-copy <<< "$command"
+notify-send "Cheatsheet" "Command copied: $command ✅"

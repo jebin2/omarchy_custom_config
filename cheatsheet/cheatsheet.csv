@@ -1,4 +1,3 @@
-Copy all cheat,Copy all cheats to clipboard
 ncdu,Interactive disk usage
 du -sh *,Show size of current dir
 df -h,Filesystem usage
