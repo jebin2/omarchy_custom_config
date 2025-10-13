@@ -1,0 +1,7 @@
+Copy all cheat,Copy all cheats to clipboard
+ncdu,Interactive disk usage
+du -sh *,Show size of current dir
+df -h,Filesystem usage
+docker ps,List running containers
+docker rm $(docker ps -q),Remove all running containers
+tldr ncdu,Show tldr page for ncdu

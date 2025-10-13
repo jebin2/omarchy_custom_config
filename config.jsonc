@@ -1,6 +1,7 @@
 {
   "modules-left": ["custom/window-title"],
   "modules-right": [
+    "custom/tailscale",
     "custom/ports",
     "custom/gpu_memory",
     "memory"
@@ -33,5 +34,13 @@
     "interval": 0,
     "format": "{}",
     "on-click": "omarchy-launch-floating-terminal '~/git/omarchy_custom_config/HyprlandWindowSwitcher/target/release/hypr_window_switcher'"
+  },
+  "custom/tailscale": {
+    "exec": "~/git/omarchy_custom_config/tailscale.sh",
+    "interval": 10,
+    "return-type": "plain",
+    "format": "{}",
+    "on-click": "alacritty -e tsui",
+    "tooltip": false
   }
 }

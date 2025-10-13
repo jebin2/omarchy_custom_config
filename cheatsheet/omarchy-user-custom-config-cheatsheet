@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# Path to your CSV
+CHEAT_FILE="/home/jebin/git/omarchy_custom_config/cheatsheet/cheatsheet.csv"
+CONFIG_FILE="/home/jebin/git/omarchy_custom_config/config.toml"
+
+# Parse cheatsheet and display in walker menu
+parse_cheats() {
+    awk -F, '
+    {
+        key = $1
+        desc = $2
+        printf "%-35s → %s\n", key, desc
+    }' "$CHEAT_FILE"
+}
+
+# Adjust menu height (40% of focused monitor)
+monitor_height=$(hyprctl monitors -j | jq -r '.[] | select(.focused==true) | .height')
+menu_height=$((monitor_height * 40 / 100))
+
+# Show menu
+selection=$(parse_cheats | walker --dmenu --theme keybindings -p 'Cheatsheet' -w 800 -h "$menu_height")
+
+# Exit if nothing selected
+[ -z "$selection" ] && exit
+
+# Check if first row (Copy all cheat)
+if [[ "$selection" =~ ^Copy\ all\ cheat ]]; then
+    # Copy the entire CSV
+    wl-copy < "$CHEAT_FILE"
+    notify-send "Cheatsheet" "All cheats copied to clipboard ✅"
+else
+    # Copy only the command (first column before comma)
+    command=$(awk -F, -v sel="$selection" '
+        BEGIN {cmd=""}
+        $1 ~ sel {cmd=$1; exit}
+        END {print cmd}' "$CHEAT_FILE")
+
+    # Fallback: if awk fails, extract first part before → 
+    if [ -z "$command" ]; then
+        command=$(echo "$selection" | awk -F'→' '{print $1}' | xargs)
+    fi
+
+    # Copy command
+    wl-copy <<< "$command"
+    notify-send "Cheatsheet" "Command copied: $command ✅"
+fi
