@@ -42,5 +42,18 @@
     "format": "{}",
     "on-click": "alacritty -e tsui",
     "tooltip": false
+  },
+  "custom/nekoviewer": {
+    "exec": "~/git/neko-apps/neko-viewer/main.sh 1",
+    "interval": 10,
+    "return-type": "plain",
+    "format": {},
+    "on-click": "~/git/neko-apps/neko-viewer/main.sh 2",
+    "tooltip": false
+  },
+  "custom/fish": {
+    "exec": "~/git/omarchy_custom_config/fish_anim.sh",
+    "restart-interval": 1,  // Keep it alive
+    "tooltip": false
   }
 }

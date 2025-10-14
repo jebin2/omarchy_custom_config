@@ -9,48 +9,62 @@ grep -q '^SEARCH_WITH_GEMINI=' "$CONFIG_FILE" || echo 'SEARCH_WITH_GEMINI="false
 # Read current GEMINI toggle
 SEARCH_WITH_GEMINI=$(awk -F= '/SEARCH_WITH_GEMINI/ {gsub(/[" ]/,"",$2); print $2}' "$CONFIG_FILE")
 
-# Prepare first two rows with proper alignment
-COPY_ALL_ROW="$(printf "%-35s → %s" "Copy all cheat" "Copy all cheats to clipboard")"
-
+# Prepare special rows
 if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
-    GEMINI_ROW="$(printf "%-35s → %s" "[✓] Search with Gemini API" "Run Gemini search")"
+    GEMINI_ROW="[✓] Search with Gemini API → Toggle Gemini search"
 else
-    GEMINI_ROW="$(printf "%-35s → %s" "[ ] Search with Gemini API" "Run Gemini search")"
+    GEMINI_ROW="[ ] Search with Gemini API → Toggle Gemini search"
 fi
 
-# Parse cheatsheet and build menu
-parse_cheats() {
-    awk -F, -v copy_row="$COPY_ALL_ROW" -v gemini_row="$GEMINI_ROW" '
-    BEGIN {
-        # Firdt row: Gemini toggle
-        # print gemini_row
-        # Second row: Copy all cheats
-        print copy_row
-    }
+COPY_ALL_ROW="Copy all cheat → Copy all cheats to clipboard"
+
+# Build menu items
+build_menu() {
     {
-        key = $1
-        desc = $2
-        printf "%-35s → %s\n", key, desc
-    }' "$CHEAT_FILE"
+        echo "$GEMINI_ROW"
+        echo "$COPY_ALL_ROW"
+        awk -F, '{printf "%s → %s\n", $1, $2}' "$CHEAT_FILE"
+    } | column -t -s '→'
 }
 
-# Adjust menu height (40%)
-monitor_height=$(hyprctl monitors -j | jq -r '.[] | select(.focused==true) | .height')
-menu_height=$((monitor_height * 40 / 100))
+# fzf arguments
+fzf_args=(
+  --preview '
+    selection=$(echo {});
+    cmd=$(echo $selection | awk "{print \$1}"); 
+    desc=$(grep -F "$cmd" "'"$CHEAT_FILE"'" | cut -d, -f2 | head -1);
+    if [[ -n "$desc" ]]; then
+      echo "📝 Description: $desc";
+      echo "";
+      echo "";
+      echo "─────────────────────────────────────────────────────";
+      echo "";
+    fi;
+    main_cmd=$(echo "$cmd" | awk "{print \$1}" | sed "s/^sudo //");
+    if [[ "$selection" != *"Search with Gemini API"* && "$cmd" != *"Copy all cheat"* ]]; then
+      echo "📖 Man Page: $main_cmd";
+      echo "";
+      man "$main_cmd" 2>/dev/null || clear;echo "No manual entry for $main_cmd";
+    fi'
+  --preview-label='Description + man page | alt-p: toggle, alt-j/k: scroll'
+  --preview-label-pos='bottom'
+  --preview-window 'down:65%:wrap'
+  --bind 'alt-p:toggle-preview'
+  --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
+  --bind 'alt-k:preview-up,alt-j:preview-down'
+  --color 'pointer:green,marker:green'
+  --prompt 'Cheatsheet> '
+  --header 'Enter: copy command | alt-p: toggle preview | Ctrl-C: exit'
+  --no-multi
+)
 
-# Show menu
-selection=$(parse_cheats | walker --dmenu --theme keybindings -p 'Cheatsheet' -w 800 -h "$menu_height")
+# Show menu and get selection
+selection=$(build_menu | fzf "${fzf_args[@]}")
 
-[ -z "$selection" ] && exit
+# Exit if no selection
+[[ -z "$selection" ]] && exit
 
-# Handle first row: Copy all cheats
-if [[ "$selection" =~ ^Copy\ all\ cheat ]]; then
-    wl-copy < "$CHEAT_FILE"
-    notify-send "Cheatsheet" "All cheats copied to clipboard ✅"
-    exit
-fi
-
-# Handle second row: Gemini toggle
+# Handle Gemini toggle
 if [[ "$selection" =~ "Search with Gemini API" ]]; then
     if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
         sed -i 's/SEARCH_WITH_GEMINI *= *.*/SEARCH_WITH_GEMINI="false"/' "$CONFIG_FILE"
@@ -59,12 +73,18 @@ if [[ "$selection" =~ "Search with Gemini API" ]]; then
         sed -i 's/SEARCH_WITH_GEMINI *= *.*/SEARCH_WITH_GEMINI="true"/' "$CONFIG_FILE"
         notify-send "Cheatsheet" "Gemini search enabled ✅"
     fi
-    # Rerun menu to reflect updated tick
+    # Rerun to reflect updated toggle
     exec "$0"
 fi
 
-# Handle all other rows: copy command (first column)
-command=$(awk -F, -v sel="$selection" '$1 ~ sel {print $1; exit}' "$CHEAT_FILE")
-[ -z "$command" ] && command=$(echo "$selection" | awk -F'→' '{print $1}' | xargs)
+# Handle copy all cheats
+if [[ "$selection" =~ ^"Copy all cheat" ]]; then
+    wl-copy < "$CHEAT_FILE"
+    notify-send "Cheatsheet" "All cheats copied to clipboard ✅"
+    exit
+fi
+
+# Handle regular cheat selection - copy command (first column)
+command=$(echo "$selection" | awk -F'→' '{print $1}' | xargs)
 wl-copy <<< "$command"
 notify-send "Cheatsheet" "Command copied: $command ✅"
