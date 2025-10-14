@@ -22,5 +22,9 @@
   {
     "command": "tldr ncdu",
     "description": "Show tldr page for ncdu"
+  },
+  {
+    "command": "cp -r source_dir destination_dir",
+    "description": "copy recursive"
   }
 ]
