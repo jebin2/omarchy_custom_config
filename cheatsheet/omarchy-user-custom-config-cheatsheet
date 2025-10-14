@@ -13,12 +13,12 @@ set -x             # Print commands and their arguments as they are executed.
 # -----------------------------------------------------------------------------
 
 # --- Configuration ---
-# MODIFIED: Point to the new JSON cheatsheet file
 CHEAT_FILE="/home/jebin/git/omarchy_custom_config/cheatsheet/cheatsheet.json"
 CONFIG_FILE="/home/jebin/git/omarchy_custom_config/config.toml"
 ENV_FILE="/home/jebin/git/omarchy_custom_config/.env" #contains secret keys like GEMINI_API_KEY
 SYSTEM_PROMPT_FILE="/home/jebin/git/omarchy_custom_config/cheatsheet/system_prompt.md"
 DEBOUNCE_PID_FILE="/tmp/cheatsheet_debounce.pid"
+RELOAD_FLAG_FILE="/tmp/cheatsheet_reload.flag" ### ADDED ### Flag file for reloading
 
 echo "--- Script started at $(date) ---"
 
@@ -70,9 +70,120 @@ build_static_menu() {
     {
         echo "$GEMINI_ROW"
         echo "$COPY_ALL_ROW"
-        # MODIFIED: Use jq to parse the JSON file and format the output
         jq -r '.[] | "\(.command) ###→ \(.description)"' "$CHEAT_FILE"
     } | column -t -s '###'
+}
+
+# --- Function to add command to JSON ---
+add_to_json() {
+    local cmd="$1"
+    local desc="$2"
+    
+    echo "DEBUG: Adding to JSON - cmd: '$cmd', desc: '$desc'" >&2
+    
+    # Check if command already exists
+    if jq -e --arg cmd "$cmd" '.[] | select(.command == $cmd)' "$CHEAT_FILE" > /dev/null 2>&1; then
+        edit_in_json "$1" "$2"
+        return 1
+    fi
+    
+    # Add new entry to JSON
+    jq --arg cmd "$cmd" --arg desc "$desc" '. += [{"command": $cmd, "description": $desc}]' "$CHEAT_FILE" > "${CHEAT_FILE}.tmp" && mv "${CHEAT_FILE}.tmp" "$CHEAT_FILE"
+    
+    notify-send "Cheatsheet" "Added: $cmd ✅"
+    echo "DEBUG: Successfully added to JSON" >&2
+}
+
+# --- Function to edit command in JSON ---
+edit_in_json() {
+    local cmd="$1"
+    local desc="$2"
+    
+    echo "DEBUG: Editing in JSON - cmd: '$cmd', desc: '$desc'" >&2
+    
+    # Check if command exists
+    if ! jq -e --arg cmd "$cmd" '.[] | select(.command == $cmd)' "$CHEAT_FILE" > /dev/null 2>&1; then
+        echo "ERROR: Command '$cmd' not found in cheatsheet" >&2
+        notify-send "Cheatsheet Error" "Command not found: $cmd"
+        return 1
+    fi
+    
+    # Update the entry in JSON
+    jq --arg cmd "$cmd" --arg desc "$desc" 'map(if .command == $cmd then .description = $desc else . end)' "$CHEAT_FILE" > "${CHEAT_FILE}.tmp" && mv "${CHEAT_FILE}.tmp" "$CHEAT_FILE"
+    
+    notify-send "Cheatsheet" "Updated: $cmd ✅"
+    echo "DEBUG: Successfully updated in JSON" >&2
+}
+
+# --- NEW: Function to delete command from JSON ---
+delete_from_json() {
+    local selection="$1"
+    
+    # Extract the command part (before the arrow)
+    cmd_to_delete="${selection#\'}"      # remove leading ' if present
+    cmd_to_delete="${cmd_to_delete%%→*}"  # everything before →
+    cmd_to_delete="$(echo "$cmd_to_delete" | xargs)"  # trim leading/trailing spaces
+    
+    echo "DEBUG: Deleting from JSON - cmd: '$cmd_to_delete'" >&2
+    
+    # Check if the command exists in the JSON
+    if ! jq -e --arg cmd "$cmd_to_delete" '.[] | select(.command == $cmd)' "$CHEAT_FILE" > /dev/null 2>&1; then
+        echo "ERROR: Command '$cmd_to_delete' not found for deletion" >&2
+        notify-send "Cheatsheet Error" "Command not found for deletion: $cmd_to_delete"
+        return 1
+    fi
+    
+    # Delete the entry from JSON
+    jq --arg cmd "$cmd_to_delete" 'del(.[] | select(.command == $cmd))' "$CHEAT_FILE" > "${CHEAT_FILE}.tmp" && mv "${CHEAT_FILE}.tmp" "$CHEAT_FILE"
+    
+    notify-send "Cheatsheet" "Deleted: $cmd_to_delete ✅"
+    echo "DEBUG: Successfully deleted from JSON" >&2
+}
+
+# --- Shared command handler for /add and /edit ---
+# Returns 0 if a command was handled, 1 otherwise.
+handle_special_commands() {
+    local query="$1"
+
+    ### MODIFIED ### Removed NEED_RELOAD logic from here
+    
+    # --- Handle /add command ---
+    if [[ "$query" =~ ^/add[[:space:]]+ ]]; then
+        query="${query#/add }"
+        if [[ "$query" =~ ^(.+)[[:space:]]*###[[:space:]]*(.+)$ ]]; then
+            local cmd="${BASH_REMATCH[1]}"
+            cmd=$(echo "$cmd" | xargs)  # trim whitespace
+            local desc="${BASH_REMATCH[2]}"
+            desc=$(echo "$desc" | xargs)  # trim whitespace
+            
+            add_to_json "$cmd" "$desc"
+            touch "$RELOAD_FLAG_FILE" ### ADDED ### Create flag file on success
+            build_static_menu
+        else
+            echo "❌ Invalid format. Use: /add <command> ### <description>"
+        fi
+        return 0 # Command was handled
+    fi
+
+    # --- Handle /edit command ---
+    if [[ "$query" =~ ^/edit[[:space:]]+ ]]; then
+        query="${query#/edit }"
+        if [[ "$query" =~ ^(.+)[[:space:]]*###[[:space:]]*(.+)$ ]]; then
+            local cmd="${BASH_REMATCH[1]}"
+            cmd=$(echo "$cmd" | xargs)  # trim whitespace
+            local desc="${BASH_REMATCH[2]}"
+            desc=$(echo "$desc" | xargs)  # trim whitespace
+            
+            edit_in_json "$cmd" "$desc"
+            touch "$RELOAD_FLAG_FILE" ### ADDED ### Create flag file on success
+            build_static_menu
+        else
+            echo "❌ Invalid format. Use: /edit <command> ### <description>"
+        fi
+        return 0 # Command was handled
+    fi
+    
+    return 1 # No special command was handled
 }
 
 # --- Debounced Gemini Search Wrapper ---
@@ -80,7 +191,10 @@ debounced_gemini_search() {
     local query="$1"
     local debounce_delay=2
 
-    # --- NEW: Handle empty query ---
+    # Handle special commands first
+    handle_special_commands "$query" && return
+
+    # --- Handle empty query ---
     if [[ -z "$query" || "$query" =~ ^[[:space:]]*$ ]]; then
         echo "DEBUG: Query empty — showing static menu" >&2
 
@@ -98,7 +212,6 @@ debounced_gemini_search() {
         build_static_menu
         return
     fi
-    # --- end of NEW section ---
 
     # Kill any existing search process
     if [[ -f "$DEBOUNCE_PID_FILE" ]]; then
@@ -132,8 +245,6 @@ debounced_gemini_search() {
         fi
 
         # 2. Update status to "Request sent" IN-PLACE using ANSI codes
-        # \033[1A -> Move cursor up one line
-        # \033[K  -> Clear from cursor to end of line
         echo -e "\033[1A\033[K🚀 Request sent to Gemini API - Processing: \"$query\""
 
         # 3. Perform the actual search and capture the output
@@ -148,7 +259,6 @@ debounced_gemini_search() {
         fi
     ) &
 }
-
 
 # --- Gemini Search Function ---
 gemini_search() {
@@ -228,13 +338,24 @@ gemini_search() {
             echo "DEBUG: Parsed cmd: $cmd" >&2
 
             if [[ -n "$cmd" ]]; then
-                # MODIFIED: Look up the command in the cheatsheet.json for description
+                # Look up the command in the cheatsheet.json for description
                 desc=$(jq -r --arg cmd "$cmd" '.[] | select(.command == $cmd) | .description' "$CHEAT_FILE" 2>/dev/null)
 
                 if [[ -n "$desc" ]]; then
                     echo "💡 $cmd → $desc"
                 else
-                    echo "💡 $cmd"
+                    # NEW: If command not found in JSON, add it with Gemini's description
+                    gemini_desc=$(echo "$json_content" | jq -r '.description // empty' 2>&2)
+                    # If gemini_desc is empty, use $query
+                    gemini_desc="${gemini_desc:-$query}"
+
+                    if [[ -n "$gemini_desc" ]]; then
+                        echo "DEBUG: Adding Gemini result to JSON" >&2
+                        add_to_json "$cmd" "$gemini_desc"
+                        echo "💡 $cmd → $gemini_desc (✨ New from Gemini)"
+                    else
+                        echo "💡 $cmd"
+                    fi
                 fi
             else
                 echo "--- ⚠️ Could not parse command from Gemini response ---"
@@ -252,10 +373,26 @@ gemini_search() {
     fi
 }
 
+# --- Function to handle input in non-Gemini mode ---
+handle_non_gemini_change() {
+    local query="$1"
+
+    # Handle /add or /edit first
+    handle_special_commands "$query" && return
+
+    # Filter static menu with current query
+    build_static_menu | grep -i --color=never -E "$query"
+}
+
 # Export functions and variables for fzf to use
 export -f gemini_search
 export -f debounced_gemini_search
 export -f build_static_menu
+export -f add_to_json
+export -f edit_in_json
+export -f delete_from_json
+export -f handle_special_commands
+export -f handle_non_gemini_change
 export GEMINI_API_KEY
 export SYSTEM_PROMPT_FILE
 export LOG_FILE
@@ -263,83 +400,71 @@ export DEBOUNCE_PID_FILE
 export CHEAT_FILE
 export GEMINI_ROW
 export COPY_ALL_ROW
+export RELOAD_FLAG_FILE ### ADDED ### Export the flag file variable
 
+# --- Common FZF arguments for both modes ---
+# NEW: Added ctrl-D binding for delete functionality
+fzf_common_args=(
+  --preview '
+    selection=$(echo {});
+    if [[ ! "$selection" =~ (⏱️|🚀|❌) ]]; then
+      selection="${selection#💡 }"
+      description=$(awk -F "→" "{print \$2}" <<< "$selection")
+      cmd_part=$(awk -F "→" "{print \$1}" <<< "$selection")
+      cmd=$(xargs <<< "$cmd_part")
 
-# --- FZF with dynamic reload ---
+      echo "📝 Description: $description";
+      echo ""; echo "";
+      main_cmd=$(echo "$cmd" | awk "{print \$1}" | sed "s/^sudo //");
+      if [[ "$selection" != *"Search with Gemini API"* && "$selection" != *"Copy all cheat"* ]]; then
+        echo "📖 Man Page: $main_cmd";
+        echo "";
+        man "$main_cmd" 2>/dev/null || echo "No manual entry for $main_cmd";
+      fi
+    fi'
+  --preview-label='Desc + man | alt-p: toggle, alt-j/k: scroll | ctrl-D: delete'
+  --preview-label-pos='bottom'
+  --preview-window 'down:65%:wrap'
+  --bind 'alt-p:toggle-preview'
+  --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
+  --bind 'alt-k:preview-up,alt-j:preview-down'
+  --bind 'ctrl-e:transform-query(echo {} | grep -vE "Search with Gemini API|Copy all cheat" | sed "s/  *→/ →/" | sed "s/→/###/" | sed "s/^/\/edit /")'
+  --bind 'ctrl-D:execute(delete_from_json "{}" 2>>$LOG_FILE)+reload(build_static_menu)'
+  --color 'pointer:green,marker:green'
+  --no-multi
+  --header 'Enter: copy | /add <cmd> ### <desc> | Ctrl-e: edit | Ctrl-d: delete'
+)
+
+# --- FZF with dynamic reload based on mode ---
 if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
     fzf_args=(
-      # The list is now fully dynamic, generated by the reload command
+      "${fzf_common_args[@]}"
       --disabled
       --bind "start:reload:build_static_menu"
       --bind "change:reload:debounced_gemini_search {q} 2>>$LOG_FILE || true"
-      --preview '
-        selection=$(echo {});
-        if [[ ! "$selection" =~ (⏱️|🚀|❌) ]]; then
-          selection="${selection#💡 }"
-          description=$(awk -F "→" "{print \$2}" <<< "$selection")
-          cmd_part=$(awk -F "→" "{print \$1}" <<< "$selection")
-          cmd=$(xargs <<< "$cmd_part")
-
-          echo "📝 Description: $description";
-          echo ""; echo "";
-          main_cmd=$(echo "$cmd" | awk "{print \$1}" | sed "s/^sudo //");
-          if [[ "$selection" != *"Search with Gemini API"* && "$selection" != *"Copy all cheat"* ]]; then
-            echo "📖 Man Page: $main_cmd";
-            echo "";
-            man "$main_cmd" 2>/dev/null || echo "No manual entry for $main_cmd";
-          fi
-        fi'
-      --preview-label='Description + man page | alt-p: toggle, alt-j/k: scroll'
-      --preview-label-pos='bottom'
-      --preview-window 'down:65%:wrap'
-      --bind 'alt-p:toggle-preview'
-      --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
-      --bind 'alt-k:preview-up,alt-j:preview-down'
-      --color 'pointer:green,marker:green'
-      --prompt '🤖 Gemini Search (debounced)> '
-      --header 'Type to search with Gemini (2s delay) | Enter: copy | Ctrl-C: exit'
-      --no-multi
+      --prompt '🤖 Gemini Search> '
       --ansi # IMPORTANT: Enable processing of ANSI escape codes
       --header-lines=0
     )
 else
+    # MODIFIED: Non-Gemini mode now also uses reload for interactive /add and /edit
     fzf_args=(
-      --preview '
-        selection=$(echo {});
-        description=$(awk -F "→" "{print \$2}" <<< "$selection")
-        cmd_part=$(awk -F "→" "{print \$1}" <<< "$selection")
-        cmd=$(xargs <<< "$cmd_part")
-
-        echo "📝 Description: $description";
-        echo ""; echo "";
-        main_cmd=$(echo "$cmd" | awk "{print \$1}" | sed "s/^sudo //");
-        if [[ "$selection" != *"Search with Gemini API"* && "$selection" != *"Copy all cheat"* ]]; then
-          echo "📖 Man Page: $main_cmd";
-          echo "";
-          man "$main_cmd" 2>/dev/null || echo "No manual entry for $main_cmd";
-        fi'
-      --preview-label='Description + man page | alt-p: toggle, alt-j/k: scroll'
-      --preview-label-pos='bottom'
-      --preview-window 'down:65%:wrap'
-      --bind 'alt-p:toggle-preview'
-      --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
-      --bind 'alt-k:preview-up,alt-j:preview-down'
-      --color 'pointer:green,marker:green'
-      --prompt 'Cheatsheet> '
-      --header 'Enter: copy command | alt-p: toggle preview | Ctrl-C: exit'
-      --no-multi
-    )
+    "${fzf_common_args[@]}"
+    --disabled
+    --bind "start:reload:build_static_menu"
+    --bind "change:reload:handle_non_gemini_change {q} 2>>$LOG_FILE || true"
+    --prompt 'Cheatsheet> '
+  )
 fi
 
 # --- Main Logic ---
-# The list generation is now fully handled by the fzf bindings
-if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
-    # The initial list is now loaded via the 'start' binding.
-    # We pipe an empty string to fzf to start it, the bindings do the rest.
-    selection=$(fzf "${fzf_args[@]}")
-else
-    selection=$(build_static_menu | fzf "${fzf_args[@]}")
-fi
+# The list generation is now fully handled by the fzf bindings in both modes.
+# We pipe an empty string to fzf to start it, the bindings do the rest.
+
+### ADDED ### Ensure flag file does not exist before starting fzf
+rm -f "$RELOAD_FLAG_FILE"
+
+selection=$(fzf "${fzf_args[@]}")
 
 # Cleanup files on exit
 rm -f "$DEBOUNCE_PID_FILE"
@@ -347,9 +472,20 @@ rm -f "$DEBOUNCE_PID_FILE"
 # Exit if no selection
 if [[ -z "$selection" ]]; then
     echo "DEBUG: No selection made. Exiting."
+    ### MODIFIED ### Check for reload even when selection is empty (e.g., user hits Esc after adding)
+    if [ -f "$RELOAD_FLAG_FILE" ]; then
+        rm -f "$RELOAD_FLAG_FILE"
+        exec "$0"
+    fi
     exit
 fi
 echo "DEBUG: User selected: '$selection'"
+
+### MODIFIED ### Main reload logic using the flag file
+if [ -f "$RELOAD_FLAG_FILE" ]; then
+    rm -f "$RELOAD_FLAG_FILE"
+    exec "$0"
+fi
 
 # Handle Gemini toggle
 if [[ "$selection" =~ "Search with Gemini API" ]]; then
@@ -367,7 +503,6 @@ fi
 # Handle copy all cheats
 if [[ "$selection" =~ ^"Copy all cheat" ]]; then
     echo "DEBUG: Handling 'Copy all cheats'."
-    # MODIFIED: Pretty-print the JSON to the clipboard
     jq '.' "$CHEAT_FILE" | wl-copy
     notify-send "Cheatsheet" "All cheats copied to clipboard ✅"
     exit
