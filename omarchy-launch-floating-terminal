@@ -1,0 +1,5 @@
+#!/bin/bash
+
+cmd="$*"
+#setsid alacritty --class Omarchy -e bash -c "$cmd; omarchy-show-done"
+setsid alacritty --class Omarchy -e bash -c "$cmd;"
