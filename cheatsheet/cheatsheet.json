@@ -1,0 +1,26 @@
+[
+  {
+    "command": "ncdu",
+    "description": "Interactive disk usage"
+  },
+  {
+    "command": "du -sh *",
+    "description": "Show size of current dir"
+  },
+  {
+    "command": "df -h",
+    "description": "Filesystem usage"
+  },
+  {
+    "command": "docker ps",
+    "description": "List running containers"
+  },
+  {
+    "command": "docker rm $(docker ps -q)",
+    "description": "Remove all running containers"
+  },
+  {
+    "command": "tldr ncdu",
+    "description": "Show tldr page for ncdu"
+  }
+]

@@ -1,13 +1,61 @@
 #!/bin/bash
 
-CHEAT_FILE="/home/jebin/git/omarchy_custom_config/cheatsheet/cheatsheet.csv"
-CONFIG_FILE="/home/jebin/git/omarchy_custom_config/config.toml"
+# -----------------------------------------------------------------------------
+# DEBUGGING:
+# Enable verbose output, printing each command as it's executed.
+# All debug output (from set -x) and our custom log messages (to stderr)
+# will be redirected to the log file defined below.
+# -----------------------------------------------------------------------------
+LOG_FILE="/tmp/cheatsheet_debug.log"
+[ -f "$LOG_FILE" ] && rm -f "$LOG_FILE"
+exec 2> "$LOG_FILE" # Redirect stderr to the log file
+set -x             # Print commands and their arguments as they are executed.
+# -----------------------------------------------------------------------------
 
+# --- Configuration ---
+# MODIFIED: Point to the new JSON cheatsheet file
+CHEAT_FILE="/home/jebin/git/omarchy_custom_config/cheatsheet/cheatsheet.json"
+CONFIG_FILE="/home/jebin/git/omarchy_custom_config/config.toml"
+ENV_FILE="/home/jebin/git/omarchy_custom_config/.env" #contains secret keys like GEMINI_API_KEY
+SYSTEM_PROMPT_FILE="/home/jebin/git/omarchy_custom_config/cheatsheet/system_prompt.md"
+DEBOUNCE_PID_FILE="/tmp/cheatsheet_debounce.pid"
+
+echo "--- Script started at $(date) ---"
+
+# --- File Checks ---
+[[ ! -f "$CHEAT_FILE" ]] && echo "ERROR: Cheat file not found at $CHEAT_FILE" && exit 1
+[[ ! -f "$CONFIG_FILE" ]] && echo "ERROR: Config file not found at $CONFIG_FILE" && exit 1
+[[ ! -f "$ENV_FILE" ]] && echo "ERROR: Environment file not found at $ENV_FILE" && exit 1
+[[ ! -f "$SYSTEM_PROMPT_FILE" ]] && echo "ERROR: System prompt file not found at $SYSTEM_PROMPT_FILE" && exit 1
+
+# --- Setup ---
 # Ensure Gemini toggle exists in config
 grep -q '^SEARCH_WITH_GEMINI=' "$CONFIG_FILE" || echo 'SEARCH_WITH_GEMINI="false"' >> "$CONFIG_FILE"
 
-# Read current GEMINI toggle
-SEARCH_WITH_GEMINI=$(awk -F= '/SEARCH_WITH_GEMINI/ {gsub(/[" ]/,"",$2); print $2}' "$CONFIG_FILE")
+# Read current GEMINI toggle - ROBUST METHOD
+SEARCH_WITH_GEMINI=$(grep '^SEARCH_WITH_GEMINI=' "$CONFIG_FILE" | sed 's/.*"\(.*\)"/\1/')
+echo "DEBUG: SEARCH_WITH_GEMINI is set to '$SEARCH_WITH_GEMINI'"
+
+# Source environment variables to get API key (if Gemini enabled)
+if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
+    if [ -f "$ENV_FILE" ]; then
+        { set +x; } 2>/dev/null
+        set -o allexport; source "$ENV_FILE"; set +o allexport
+        { set -x; } 2>/dev/null
+    fi
+
+    # Temporarily disable debugging to check the variable safely
+    { set +x; } 2>/dev/null
+    if [ -z "$GEMINI_API_KEY" ]; then
+        echo "ERROR: GEMINI_API_KEY is not set or found in $ENV_FILE"
+        notify-send "Cheatsheet Error" "GEMINI_API_KEY not found!"
+        exit 1
+    fi
+    { set -x; } 2>/dev/null
+
+    echo "DEBUG: GEMINI_API_KEY is set."  # ✅ safe to log, no value shown
+fi
+
 
 # Prepare special rows
 if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
@@ -15,57 +63,297 @@ if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
 else
     GEMINI_ROW="[ ] Search with Gemini API → Toggle Gemini search"
 fi
-
 COPY_ALL_ROW="Copy all cheat → Copy all cheats to clipboard"
 
-# Build menu items
-build_menu() {
+# --- Menu Functions ---
+build_static_menu() {
     {
         echo "$GEMINI_ROW"
         echo "$COPY_ALL_ROW"
-        awk -F, '{printf "%s → %s\n", $1, $2}' "$CHEAT_FILE"
-    } | column -t -s '→'
+        # MODIFIED: Use jq to parse the JSON file and format the output
+        jq -r '.[] | "\(.command) ###→ \(.description)"' "$CHEAT_FILE"
+    } | column -t -s '###'
 }
 
-# fzf arguments
-fzf_args=(
-  --preview '
-    selection=$(echo {});
-    cmd=$(echo $selection | awk "{print \$1}"); 
-    desc=$(grep -F "$cmd" "'"$CHEAT_FILE"'" | cut -d, -f2 | head -1);
-    if [[ -n "$desc" ]]; then
-      echo "📝 Description: $desc";
-      echo "";
-      echo "";
-      echo "─────────────────────────────────────────────────────";
-      echo "";
-    fi;
-    main_cmd=$(echo "$cmd" | awk "{print \$1}" | sed "s/^sudo //");
-    if [[ "$selection" != *"Search with Gemini API"* && "$cmd" != *"Copy all cheat"* ]]; then
-      echo "📖 Man Page: $main_cmd";
-      echo "";
-      man "$main_cmd" 2>/dev/null || clear;echo "No manual entry for $main_cmd";
-    fi'
-  --preview-label='Description + man page | alt-p: toggle, alt-j/k: scroll'
-  --preview-label-pos='bottom'
-  --preview-window 'down:65%:wrap'
-  --bind 'alt-p:toggle-preview'
-  --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
-  --bind 'alt-k:preview-up,alt-j:preview-down'
-  --color 'pointer:green,marker:green'
-  --prompt 'Cheatsheet> '
-  --header 'Enter: copy command | alt-p: toggle preview | Ctrl-C: exit'
-  --no-multi
-)
+# --- Debounced Gemini Search Wrapper ---
+debounced_gemini_search() {
+    local query="$1"
+    local debounce_delay=2
 
-# Show menu and get selection
-selection=$(build_menu | fzf "${fzf_args[@]}")
+    # --- NEW: Handle empty query ---
+    if [[ -z "$query" || "$query" =~ ^[[:space:]]*$ ]]; then
+        echo "DEBUG: Query empty — showing static menu" >&2
+
+        # Cancel any pending debounce job
+        if [[ -f "$DEBOUNCE_PID_FILE" ]]; then
+            old_pid=$(cat "$DEBOUNCE_PID_FILE" 2>/dev/null)
+            if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+                kill "$old_pid" 2>/dev/null || true
+                pkill -P "$old_pid" 2>/dev/null || true
+            fi
+            rm -f "$DEBOUNCE_PID_FILE"
+        fi
+
+        # Immediately reload the static cheatsheet
+        build_static_menu
+        return
+    fi
+    # --- end of NEW section ---
+
+    # Kill any existing search process
+    if [[ -f "$DEBOUNCE_PID_FILE" ]]; then
+        old_pid=$(cat "$DEBOUNCE_PID_FILE" 2>/dev/null)
+        if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+            echo "DEBUG: Cancelling previous search (PID: $old_pid)" >&2
+            kill "$old_pid" 2>/dev/null || true
+            # Kill the entire process group to ensure curl is also killed
+            pkill -P "$old_pid" 2>/dev/null || true
+        fi
+    fi
+
+    # Start new search in background and save its PID
+    (
+        search_pid=$$
+        echo "$search_pid" > "$DEBOUNCE_PID_FILE"
+
+        # 1. Print initial status
+        echo "⏱️  Will search Gemini in ${debounce_delay}s for: \"$query\""
+
+        # Debounce delay - wait for typing to stop
+        sleep "$debounce_delay"
+
+        # Check if we're still the current search
+        current_pid=$(cat "$DEBOUNCE_PID_FILE" 2>/dev/null)
+        if [[ "$search_pid" != "$current_pid" ]]; then
+            echo "DEBUG: Search cancelled (newer search started)" >&2
+            # Clear the "Will search" message
+            echo -e "\033[1A\033[K❌ Cancelled - new search started"
+            exit 0
+        fi
+
+        # 2. Update status to "Request sent" IN-PLACE using ANSI codes
+        # \033[1A -> Move cursor up one line
+        # \033[K  -> Clear from cursor to end of line
+        echo -e "\033[1A\033[K🚀 Request sent to Gemini API - Processing: \"$query\""
+
+        # 3. Perform the actual search and capture the output
+        gemini_results=$(gemini_search "$query")
+
+        # 4. Replace the "Request sent" status with the final results
+        echo -e "\033[1A\033[K$gemini_results"
+
+        # Clean up PID file if we're still current
+        if [[ "$search_pid" == "$(cat "$DEBOUNCE_PID_FILE" 2>/dev/null)" ]]; then
+            rm -f "$DEBOUNCE_PID_FILE"
+        fi
+    ) &
+}
+
+
+# --- Gemini Search Function ---
+gemini_search() {
+    local query="$1"
+
+    # If query is empty or too short, return nothing
+    if [[ -z "$query" || ${#query} -lt 3 ]]; then
+        return
+    fi
+
+    echo "🔍 Searching with Gemini: '$query'" >&2
+    echo "DEBUG: GEMINI_API_KEY detected (hidden for security)" >&2
+    echo "DEBUG: System prompt file: $SYSTEM_PROMPT_FILE" >&2
+
+    # Read the system prompt
+    if [[ ! -f "$SYSTEM_PROMPT_FILE" ]]; then
+        echo "ERROR: System prompt file not found!" >&2
+        echo "❌ ERROR: System prompt file not found"
+        return
+    fi
+    SYSTEM_PROMPT=$(<"$SYSTEM_PROMPT_FILE")
+    echo "DEBUG: System prompt loaded (${#SYSTEM_PROMPT} chars)" >&2
+
+    # Create JSON payload
+    JSON_PAYLOAD=$(jq -n \
+                  --arg sp "$SYSTEM_PROMPT" \
+                  --arg q "$query" \
+                  '{contents: [{parts: [{text: $sp}, {text: "User query: " + $q}]}]}')
+
+    echo "DEBUG: JSON payload created (${#JSON_PAYLOAD} chars)" >&2
+
+    # Make the API call to Gemini with timeout
+    echo "DEBUG: Making API call..." >&2
+    API_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+        --max-time 10 \
+        -H 'Content-Type: application/json' \
+        -d "$JSON_PAYLOAD" \
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$GEMINI_API_KEY" 2>&2)
+
+    # Check if curl was killed (happens when debounce cancels)
+    if [[ $? -eq 143 ]] || [[ $? -eq 130 ]]; then
+        echo "DEBUG: API call was cancelled" >&2
+        echo "❌ Request cancelled - new search started"
+        return
+    fi
+
+    echo "DEBUG: API call completed" >&2
+
+    # Separate body and status
+    HTTP_BODY=$(echo "$API_RESPONSE" | sed '$d')
+    HTTP_STATUS=$(echo "$API_RESPONSE" | tail -n1 | cut -d: -f2)
+
+    echo "DEBUG: HTTP Status: $HTTP_STATUS" >&2
+
+    if [[ "$HTTP_STATUS" -ne 200 ]]; then
+        echo "ERROR: API Error (Status: $HTTP_STATUS)" >&2
+        echo "ERROR: Response body: $HTTP_BODY" >&2
+        echo "--- ❌ Gemini API Error (Status: $HTTP_STATUS) ---"
+        return
+    fi
+
+    # Parse the response
+    gemini_output=$(echo "$HTTP_BODY" | jq -r '.candidates[0].content.parts[0].text // empty' 2>&2)
+
+    echo "DEBUG: Gemini output length: ${#gemini_output} chars" >&2
+    echo "DEBUG: Raw Gemini output: $gemini_output" >&2
+
+    if [[ -n "$gemini_output" ]]; then
+        # Extract JSON from markdown code blocks (```json ... ```)
+        json_content=$(echo "$gemini_output" | sed -n '/```json/,/```/p' | sed '1d;$d')
+
+        echo "DEBUG: Extracted JSON: $json_content" >&2
+
+        if [[ -n "$json_content" ]]; then
+            # Parse the cmd from JSON
+            cmd=$(echo "$json_content" | jq -r '.cmd // empty' 2>&2)
+            echo "DEBUG: Parsed cmd: $cmd" >&2
+
+            if [[ -n "$cmd" ]]; then
+                # MODIFIED: Look up the command in the cheatsheet.json for description
+                desc=$(jq -r --arg cmd "$cmd" '.[] | select(.command == $cmd) | .description' "$CHEAT_FILE" 2>/dev/null)
+
+                if [[ -n "$desc" ]]; then
+                    echo "💡 $cmd → $desc"
+                else
+                    echo "💡 $cmd"
+                fi
+            else
+                echo "--- ⚠️ Could not parse command from Gemini response ---"
+            fi
+        else
+            # Fallback: show raw output if not JSON format
+            echo "--- 🤖 Gemini Suggestions for '$query' ---"
+            echo "$gemini_output" | while IFS= read -r line; do
+                [[ -n "$line" ]] && echo "💡 $line"
+            done
+            echo "--- End Gemini Results ---"
+        fi
+    else
+        echo "--- ⚠️ No results from Gemini ---"
+    fi
+}
+
+# Export functions and variables for fzf to use
+export -f gemini_search
+export -f debounced_gemini_search
+export -f build_static_menu
+export GEMINI_API_KEY
+export SYSTEM_PROMPT_FILE
+export LOG_FILE
+export DEBOUNCE_PID_FILE
+export CHEAT_FILE
+export GEMINI_ROW
+export COPY_ALL_ROW
+
+
+# --- FZF with dynamic reload ---
+if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
+    fzf_args=(
+      # The list is now fully dynamic, generated by the reload command
+      --disabled
+      --bind "start:reload:build_static_menu"
+      --bind "change:reload:debounced_gemini_search {q} 2>>$LOG_FILE || true"
+      --preview '
+        selection=$(echo {});
+        if [[ ! "$selection" =~ (⏱️|🚀|❌) ]]; then
+          selection="${selection#💡 }"
+          description=$(awk -F "→" "{print \$2}" <<< "$selection")
+          cmd_part=$(awk -F "→" "{print \$1}" <<< "$selection")
+          cmd=$(xargs <<< "$cmd_part")
+
+          echo "📝 Description: $description";
+          echo ""; echo "";
+          main_cmd=$(echo "$cmd" | awk "{print \$1}" | sed "s/^sudo //");
+          if [[ "$selection" != *"Search with Gemini API"* && "$selection" != *"Copy all cheat"* ]]; then
+            echo "📖 Man Page: $main_cmd";
+            echo "";
+            man "$main_cmd" 2>/dev/null || echo "No manual entry for $main_cmd";
+          fi
+        fi'
+      --preview-label='Description + man page | alt-p: toggle, alt-j/k: scroll'
+      --preview-label-pos='bottom'
+      --preview-window 'down:65%:wrap'
+      --bind 'alt-p:toggle-preview'
+      --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
+      --bind 'alt-k:preview-up,alt-j:preview-down'
+      --color 'pointer:green,marker:green'
+      --prompt '🤖 Gemini Search (debounced)> '
+      --header 'Type to search with Gemini (2s delay) | Enter: copy | Ctrl-C: exit'
+      --no-multi
+      --ansi # IMPORTANT: Enable processing of ANSI escape codes
+      --header-lines=0
+    )
+else
+    fzf_args=(
+      --preview '
+        selection=$(echo {});
+        description=$(awk -F "→" "{print \$2}" <<< "$selection")
+        cmd_part=$(awk -F "→" "{print \$1}" <<< "$selection")
+        cmd=$(xargs <<< "$cmd_part")
+
+        echo "📝 Description: $description";
+        echo ""; echo "";
+        main_cmd=$(echo "$cmd" | awk "{print \$1}" | sed "s/^sudo //");
+        if [[ "$selection" != *"Search with Gemini API"* && "$selection" != *"Copy all cheat"* ]]; then
+          echo "📖 Man Page: $main_cmd";
+          echo "";
+          man "$main_cmd" 2>/dev/null || echo "No manual entry for $main_cmd";
+        fi'
+      --preview-label='Description + man page | alt-p: toggle, alt-j/k: scroll'
+      --preview-label-pos='bottom'
+      --preview-window 'down:65%:wrap'
+      --bind 'alt-p:toggle-preview'
+      --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
+      --bind 'alt-k:preview-up,alt-j:preview-down'
+      --color 'pointer:green,marker:green'
+      --prompt 'Cheatsheet> '
+      --header 'Enter: copy command | alt-p: toggle preview | Ctrl-C: exit'
+      --no-multi
+    )
+fi
+
+# --- Main Logic ---
+# The list generation is now fully handled by the fzf bindings
+if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
+    # The initial list is now loaded via the 'start' binding.
+    # We pipe an empty string to fzf to start it, the bindings do the rest.
+    selection=$(fzf "${fzf_args[@]}")
+else
+    selection=$(build_static_menu | fzf "${fzf_args[@]}")
+fi
+
+# Cleanup files on exit
+rm -f "$DEBOUNCE_PID_FILE"
 
 # Exit if no selection
-[[ -z "$selection" ]] && exit
+if [[ -z "$selection" ]]; then
+    echo "DEBUG: No selection made. Exiting."
+    exit
+fi
+echo "DEBUG: User selected: '$selection'"
 
 # Handle Gemini toggle
 if [[ "$selection" =~ "Search with Gemini API" ]]; then
+    echo "DEBUG: Handling Gemini toggle."
     if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
         sed -i 's/SEARCH_WITH_GEMINI *= *.*/SEARCH_WITH_GEMINI="false"/' "$CONFIG_FILE"
         notify-send "Cheatsheet" "Gemini search disabled ✅"
@@ -73,18 +361,29 @@ if [[ "$selection" =~ "Search with Gemini API" ]]; then
         sed -i 's/SEARCH_WITH_GEMINI *= *.*/SEARCH_WITH_GEMINI="true"/' "$CONFIG_FILE"
         notify-send "Cheatsheet" "Gemini search enabled ✅"
     fi
-    # Rerun to reflect updated toggle
     exec "$0"
 fi
 
 # Handle copy all cheats
 if [[ "$selection" =~ ^"Copy all cheat" ]]; then
-    wl-copy < "$CHEAT_FILE"
+    echo "DEBUG: Handling 'Copy all cheats'."
+    # MODIFIED: Pretty-print the JSON to the clipboard
+    jq '.' "$CHEAT_FILE" | wl-copy
     notify-send "Cheatsheet" "All cheats copied to clipboard ✅"
     exit
 fi
 
-# Handle regular cheat selection - copy command (first column)
-command=$(echo "$selection" | awk -F'→' '{print $1}' | xargs)
-wl-copy <<< "$command"
+# --- Extract and copy the actual command ---
+# Trim prefix, then extract command before →
+command="${selection#💡 }"       # Remove leading 💡 if present
+command="${command%%→*}"         # Take everything before → 
+command="$(echo -e "$command" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"  # trim spaces
+
+# Copy safely without expansion
+printf '%s\n' "$command" | wl-copy
 notify-send "Cheatsheet" "Command copied: $command ✅"
+
+echo "--- Script finished at $(date) ---"
+
+# Deactivate verbose mode before exiting
+set +x
