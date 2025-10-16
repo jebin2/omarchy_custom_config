@@ -42,7 +42,7 @@
     "return-type": "plain",
     "format": {},
     "on-click": "/home/jebin/git/neko-apps/neko-viewer/main.sh 2",
-    "tooltip": "Port No: 8731"
+    "tooltip-format": "localhost:8731"
   },
   "custom/fish": {
     "exec": "/home/jebin/git/omarchy_custom_config/fish_anim.sh",

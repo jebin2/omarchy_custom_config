@@ -8,3 +8,4 @@ sh add_waybar_conf.sh
 
 sh update_ghostty_config.sh
 
+sh remove_unwanted.sh

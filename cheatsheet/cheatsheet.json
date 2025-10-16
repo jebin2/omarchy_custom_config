@@ -26,5 +26,9 @@
   {
     "command": "cp -r source_dir destination_dir",
     "description": "copy recursive"
+  },
+  {
+    "command": "reset",
+    "description": "ghostty terminall all fix"
   }
 ]
