@@ -1,9 +1,0 @@
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Windows 11 VM
-Comment=Starts the Windows 11 virtual machine
-Exec=/home/jebin/git/omarchy_custom_config/start-windows11.sh
-Icon=/home/jebin/git/omarchy_custom_config/windows11.png
-Terminal=false
-Categories=System;Emulator;
