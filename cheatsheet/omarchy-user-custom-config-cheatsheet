@@ -107,13 +107,93 @@ get_next_id() {
 # --- Get command by ID (SAFE - no execution) ---
 get_command_by_id() {
     local id="$1"
-    jq -r --argjson id "$id" '.[] | select(.id == $id) | .command' "$CHEAT_FILE" 2>/dev/null
+    local selection="$2"
+    
+    # First, try to get from JSON file by ID
+    local cmd=$(jq -r --argjson id "$id" '.[] | select(.id == $id) | .command' "$CHEAT_FILE" 2>/dev/null)
+    
+    # If found in file, return it
+    if [[ -n "$cmd" ]]; then
+        echo "$cmd"
+        return 0
+    fi
+    
+    # If not found and selection provided, try to extract from selection
+    if [[ -n "$selection" ]]; then
+        echo "DEBUG: ID $id not found in file, extracting from selection" >&2
+        
+        # Step 1: Split by → and take first value (everything before →)
+        local before_arrow="${selection%%→*}"
+        before_arrow=$(echo "$before_arrow" | xargs)  # Trim whitespace
+        
+        echo "DEBUG: After splitting by →: '$before_arrow'" >&2
+        
+        # Step 2: Check for [<number>] pattern and split with that, take last value
+        if [[ "$before_arrow" =~ \[[0-9]+\] ]]; then
+            # Extract everything after [number]
+            cmd="${before_arrow##*\[[0-9]*\]}"
+            cmd=$(echo "$cmd" | xargs)  # Trim whitespace
+            echo "DEBUG: After removing [ID]: '$cmd'" >&2
+        else
+            cmd="$before_arrow"
+        fi
+        
+        # Step 3: Remove any leading emojis (💡, ⏱️, 🚀, etc.)
+        cmd=$(echo "$cmd" | sed 's/^[[:space:]]*[💡⏱️🚀❌✨]\+[[:space:]]*//')
+        cmd=$(echo "$cmd" | xargs)  # Trim again after emoji removal
+        
+        echo "DEBUG: After removing emojis: '$cmd'" >&2
+        
+        if [[ -n "$cmd" ]]; then
+            echo "$cmd"
+            return 0
+        fi
+        
+        echo "DEBUG: Could not extract command from selection" >&2
+    fi
+    
+    return 1
 }
 
 # --- Get description by ID ---
 get_description_by_id() {
     local id="$1"
-    jq -r --argjson id "$id" '.[] | select(.id == $id) | .description' "$CHEAT_FILE" 2>/dev/null
+    local selection="$2"
+    
+    # First, try to get from JSON file by ID
+    local desc=$(jq -r --argjson id "$id" '.[] | select(.id == $id) | .description' "$CHEAT_FILE" 2>/dev/null)
+    
+    # If found in file, return it
+    if [[ -n "$desc" ]]; then
+        echo "$desc"
+        return 0
+    fi
+    
+    # If not found and selection provided, try to extract from selection
+    if [[ -n "$selection" ]]; then
+        echo "DEBUG: ID $id not found in file, extracting description from selection" >&2
+        
+        # Handle Gemini format: "💡 <command> → <description> (✨ New from Gemini)"
+        if [[ "$selection" =~ 💡[[:space:]]*(.+)[[:space:]]→[[:space:]](.+)[[:space:]]\(✨[[:space:]]*New\ from\ Gemini\) ]]; then
+            desc="${BASH_REMATCH[2]}"
+            desc=$(echo "$desc" | xargs)
+            echo "$desc"
+            return 0
+        fi
+        
+        # Handle standard format: "[ID] <command> → <description>"
+        if [[ "$selection" =~ →[[:space:]]*(.+?)([[:space:]]\(✨)?$ ]]; then
+            desc="${BASH_REMATCH[1]}"
+            # Remove trailing markers if present
+            desc=$(echo "$desc" | sed 's/[[:space:]]*([✨[:space:]]*New from Gemini[)]$//' | xargs)
+            echo "$desc"
+            return 0
+        fi
+        
+        echo "DEBUG: Could not extract description from selection" >&2
+    fi
+    
+    return 1
 }
 
 # --- Check if ID exists ---
@@ -203,7 +283,7 @@ delete_from_json() {
     fi
     
     # Get command name for notification (before deletion)
-    local cmd_name=$(get_command_by_id "$id_to_delete" | head -c 50)
+    local cmd_name=$(get_command_by_id "$id_to_delete" "$selection" | head -c 50)
     
     # Delete the entry from JSON by ID
     jq --argjson id "$id_to_delete" 'del(.[] | select(.id == $id))' \
@@ -487,8 +567,8 @@ fzf_common_args=(
       
       if [[ -n "$id" ]] && [[ "$id" =~ ^[0-9]+$ ]]; then
         # Get data by ID using helper functions
-        cmd=$(get_command_by_id "$id")
-        description=$(get_description_by_id "$id")
+        cmd=$(get_command_by_id "$id" "$selection")
+        description=$(get_description_by_id "$id" "$selection")
         
         printf "🆔 ID: %s\n" "$id"
         printf "📝 Description: %s\n" "$description"
@@ -598,46 +678,20 @@ if [[ -n "$selected_id" ]] && [[ "$selected_id" =~ ^[0-9]+$ ]]; then
     echo "DEBUG: Selected ID: $selected_id"
     
     # Get command by ID using helper function (SAFE)
-    command=$(get_command_by_id "$selected_id")
+    command=$(get_command_by_id "$selected_id" "$selection")
+    description=$(get_description_by_id "$selected_id" "$selection")
     
     if [[ -n "$command" ]]; then
         # Copy safely without expansion - use printf, not echo
         printf '%s' "$command" | wl-copy
+        if [[ "$selection" =~ "New from Gemini" ]]; then
+            add_to_json "$command" "$description"
+        fi
         notify-send "Cheatsheet" "Command copied (ID: $selected_id) ✅"
         echo "DEBUG: Copied command for ID $selected_id" >&2
     else
         echo "ERROR: Command not found for ID: $selected_id" >&2
         notify-send "Cheatsheet Error" "Command not found for ID: $selected_id"
-    fi
-else
-    # Handle Gemini results that aren't in the JSON yet
-    if [[ "$selection" =~ "New from Gemini" ]]; then
-        echo "DEBUG: Handling new Gemini result" >&2
-        
-        # Extract command and description from the selection format:
-        # "💡 <command> → <description> (✨ New from Gemini)"
-        if [[ "$selection" =~ 💡[[:space:]]*(.+)[[:space:]]→[[:space:]](.+)[[:space:]]\(✨[[:space:]]*New\ from\ Gemini\) ]]; then
-            cmd="${BASH_REMATCH[1]}"
-            cmd=$(echo "$cmd" | xargs)  # Trim whitespace
-            gemini_desc="${BASH_REMATCH[2]}"
-            gemini_desc=$(echo "$gemini_desc" | xargs)  # Trim whitespace
-            
-            echo "DEBUG: Extracted cmd='$cmd', desc='$gemini_desc'" >&2
-            
-            # Add to JSON
-            add_to_json "$cmd" "$gemini_desc"
-            
-            # Copy the command to clipboard
-            printf '%s' "$cmd" | wl-copy
-            notify-send "Cheatsheet" "Gemini result added & copied ✅"
-            echo "DEBUG: Added Gemini result to JSON and copied to clipboard" >&2
-        else
-            echo "ERROR: Could not parse Gemini result format" >&2
-            notify-send "Cheatsheet Error" "Invalid Gemini result format"
-        fi
-    else
-        echo "ERROR: Could not extract valid ID from selection" >&2
-        notify-send "Cheatsheet Error" "Invalid selection format"
     fi
 fi
 
