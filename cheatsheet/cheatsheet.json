@@ -1,34 +1,42 @@
 [
   {
+    "id": 1,
     "command": "ncdu",
     "description": "Interactive disk usage"
   },
   {
+    "id": 2,
     "command": "du -sh *",
     "description": "Show size of current dir"
   },
   {
+    "id": 3,
     "command": "df -h",
     "description": "Filesystem usage"
   },
   {
+    "id": 4,
     "command": "docker ps",
     "description": "List running containers"
   },
   {
+    "id": 5,
     "command": "docker rm $(docker ps -q)",
     "description": "Remove all running containers"
   },
   {
+    "id": 6,
     "command": "tldr ncdu",
     "description": "Show tldr page for ncdu"
   },
   {
+    "id": 7,
     "command": "cp -r source_dir destination_dir",
     "description": "copy recursive"
   },
   {
+    "id": 8,
     "command": "reset",
-    "description": "ghostty terminall all fix"
+    "description": "ghostty terminall all fix."
   }
 ]
