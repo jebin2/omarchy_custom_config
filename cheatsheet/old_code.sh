@@ -1,0 +1,699 @@
+#!/bin/bash
+
+# -----------------------------------------------------------------------------
+# DEBUGGING:
+# Enable verbose output, printing each command as it's executed.
+# All debug output (from set -x) and our custom log messages (to stderr)
+# will be redirected to the log file defined below.
+# -----------------------------------------------------------------------------
+LOG_FILE="/tmp/cheatsheet_debug.log"
+[ -f "$LOG_FILE" ] && rm -f "$LOG_FILE"
+exec 2> "$LOG_FILE" # Redirect stderr to the log file
+set -x             # Print commands and their arguments as they are executed.
+# -----------------------------------------------------------------------------
+
+# --- Configuration ---
+CHEAT_FILE="/home/jebin/git/omarchy_custom_config/cheatsheet/cheatsheet.json"
+CONFIG_FILE="/home/jebin/git/omarchy_custom_config/config.toml"
+ENV_FILE="/home/jebin/git/omarchy_custom_config/.env"
+SYSTEM_PROMPT_FILE="/home/jebin/git/omarchy_custom_config/cheatsheet/system_prompt.md"
+DEBOUNCE_PID_FILE="/tmp/cheatsheet_debounce.pid"
+RELOAD_FLAG_FILE="/tmp/cheatsheet_reload.flag"
+
+echo "--- Script started at $(date) ---"
+
+# --- File Checks ---
+[[ ! -f "$CHEAT_FILE" ]] && echo "ERROR: Cheat file not found at $CHEAT_FILE" && exit 1
+[[ ! -f "$CONFIG_FILE" ]] && echo "ERROR: Config file not found at $CONFIG_FILE" && exit 1
+[[ ! -f "$ENV_FILE" ]] && echo "ERROR: Environment file not found at $ENV_FILE" && exit 1
+[[ ! -f "$SYSTEM_PROMPT_FILE" ]] && echo "ERROR: System prompt file not found at $SYSTEM_PROMPT_FILE" && exit 1
+
+# --- Setup ---
+grep -q '^SEARCH_WITH_GEMINI=' "$CONFIG_FILE" || echo 'SEARCH_WITH_GEMINI="false"' >> "$CONFIG_FILE"
+
+# Read current GEMINI toggle
+SEARCH_WITH_GEMINI=$(grep '^SEARCH_WITH_GEMINI=' "$CONFIG_FILE" | sed 's/.*"\(.*\)"/\1/')
+echo "DEBUG: SEARCH_WITH_GEMINI is set to '$SEARCH_WITH_GEMINI'"
+
+# Source environment variables to get API key (if Gemini enabled)
+if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
+    if [ -f "$ENV_FILE" ]; then
+        { set +x; } 2>/dev/null
+        set -o allexport; source "$ENV_FILE"; set +o allexport
+        { set -x; } 2>/dev/null
+    fi
+
+    { set +x; } 2>/dev/null
+    if [ -z "$GEMINI_API_KEY" ]; then
+        echo "ERROR: GEMINI_API_KEY is not set or found in $ENV_FILE"
+        notify-send "Cheatsheet Error" "GEMINI_API_KEY not found!"
+        exit 1
+    fi
+    { set -x; } 2>/dev/null
+
+    echo "DEBUG: GEMINI_API_KEY is set."
+fi
+
+# Prepare special rows
+if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
+    GEMINI_ROW="[✓] Search with Gemini API → Toggle Gemini search"
+else
+    GEMINI_ROW="[ ] Search with Gemini API → Toggle Gemini search"
+fi
+COPY_ALL_ROW="Copy all cheat → Copy all cheats to clipboard"
+
+# =============================================================================
+# CORE UTILITY FUNCTIONS - Centralized and Reusable
+# =============================================================================
+
+# --- Extract ID from any selection string (CENTRALIZED) ---
+extract_id() {
+    local selection="$1"
+    local id=""
+
+    if [[ "$selection" = *"Search with Gemini API"* || "$selection" = *"Copy all cheat"* ]]; then
+        echo "$selection"
+    else
+        # Debug raw input
+        # echo "DEBUG: Raw selection: '$selection'" >&2
+
+        # Clean up: remove newlines, quotes, emojis, and trim
+        selection="$(echo "$selection" | tr -d '\n' | tr -d "'" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        selection="${selection//💡 /}"
+        selection="${selection//⏱️ /}"
+        selection="${selection//🚀 /}"
+
+        # Extract the first [number] or number anywhere in the string
+        if [[ "$selection" =~ \[?([0-9]+)\]? ]]; then
+            id="${BASH_REMATCH[1]}"
+        fi
+
+        if [[ -z "$id" ]]; then
+            echo "ERROR: Could not extract valid numeric ID" >&2
+            return 1
+        fi
+
+        # echo "DEBUG: Extracted ID for deletion: '$id'" >&2
+        echo "$id"
+    fi
+}
+
+# --- Get next available ID ---
+get_next_id() {
+    local max_id=$(jq '[.[].id] | max // 0' "$CHEAT_FILE")
+    echo $((max_id + 1))
+}
+
+# --- Get command by ID (SAFE - no execution) ---
+get_command_by_id() {
+    local id="$1"
+    local selection="$2"
+    
+    # First, try to get from JSON file by ID
+    local cmd=$(jq -r --argjson id "$id" '.[] | select(.id == $id) | .command' "$CHEAT_FILE" 2>/dev/null)
+    
+    # If found in file, return it
+    if [[ -n "$cmd" ]]; then
+        echo "$cmd"
+        return 0
+    fi
+    
+    # If not found and selection provided, try to extract from selection
+    if [[ -n "$selection" ]]; then
+        echo "DEBUG: ID $id not found in file, extracting from selection" >&2
+        
+        # Step 1: Split by → and take first value (everything before →)
+        local before_arrow="${selection%%→*}"
+        before_arrow=$(echo "$before_arrow" | xargs)  # Trim whitespace
+        
+        echo "DEBUG: After splitting by →: '$before_arrow'" >&2
+        
+        # Step 2: Check for [<number>] pattern and split with that, take last value
+        if [[ "$before_arrow" =~ \[[0-9]+\] ]]; then
+            # Extract everything after [number]
+            cmd="${before_arrow##*\[[0-9]*\]}"
+            cmd=$(echo "$cmd" | xargs)  # Trim whitespace
+            echo "DEBUG: After removing [ID]: '$cmd'" >&2
+        else
+            cmd="$before_arrow"
+        fi
+        
+        # Step 3: Remove any leading emojis (💡, ⏱️, 🚀, etc.)
+        cmd=$(echo "$cmd" | sed 's/^[[:space:]]*[💡⏱️🚀❌✨]\+[[:space:]]*//')
+        cmd=$(echo "$cmd" | xargs)  # Trim again after emoji removal
+        
+        echo "DEBUG: After removing emojis: '$cmd'" >&2
+        
+        if [[ -n "$cmd" ]]; then
+            echo "$cmd"
+            return 0
+        fi
+        
+        echo "DEBUG: Could not extract command from selection" >&2
+    fi
+    
+    return 1
+}
+
+# --- Get description by ID ---
+get_description_by_id() {
+    local id="$1"
+    local selection="$2"
+    
+    # First, try to get from JSON file by ID
+    local desc=$(jq -r --argjson id "$id" '.[] | select(.id == $id) | .description' "$CHEAT_FILE" 2>/dev/null)
+    
+    # If found in file, return it
+    if [[ -n "$desc" ]]; then
+        echo "$desc"
+        return 0
+    fi
+    
+    # If not found and selection provided, try to extract from selection
+    if [[ -n "$selection" ]]; then
+        echo "DEBUG: ID $id not found in file, extracting description from selection" >&2
+        
+        # Handle Gemini format: "💡 <command> → <description> (✨ New from Gemini)"
+        if [[ "$selection" =~ 💡[[:space:]]*(.+)[[:space:]]→[[:space:]](.+)[[:space:]]\(✨[[:space:]]*New\ from\ Gemini\) ]]; then
+            desc="${BASH_REMATCH[2]}"
+            desc=$(echo "$desc" | xargs)
+            echo "$desc"
+            return 0
+        fi
+        
+        # Handle standard format: "[ID] <command> → <description>"
+        if [[ "$selection" =~ →[[:space:]]*(.+?)([[:space:]]\(✨)?$ ]]; then
+            desc="${BASH_REMATCH[1]}"
+            # Remove trailing markers if present
+            desc=$(echo "$desc" | sed 's/[[:space:]]*([✨[:space:]]*New from Gemini[)]$//' | xargs)
+            echo "$desc"
+            return 0
+        fi
+        
+        echo "DEBUG: Could not extract description from selection" >&2
+    fi
+    
+    return 1
+}
+
+# --- Check if ID exists ---
+id_exists() {
+    local id="$1"
+    jq -e --argjson id "$id" '.[] | select(.id == $id)' "$CHEAT_FILE" >/dev/null 2>&1
+    return $?
+}
+
+# =============================================================================
+# JSON MANIPULATION FUNCTIONS
+# =============================================================================
+
+# --- Add command to JSON ---
+add_to_json() {
+    local cmd="$1"
+    local desc="$2"
+    
+    echo "DEBUG: Adding to JSON - cmd: '$cmd', desc: '$desc'" >&2
+    
+    # Check if command already exists
+    local existing_id=$(jq -r --arg cmd "$cmd" '.[] | select(.command == $cmd) | .id' "$CHEAT_FILE" 2>/dev/null)
+    
+    if [[ -n "$existing_id" ]]; then
+        echo "DEBUG: Command already exists with ID: $existing_id" >&2
+        notify-send "Cheatsheet" "Command already exists (ID: $existing_id)! Use /edit instead."
+        return 1
+    fi
+    
+    # Get next ID
+    local next_id=$(get_next_id)
+    
+    # Add new entry to JSON with ID
+    jq --argjson id "$next_id" --arg cmd "$cmd" --arg desc "$desc" \
+       '. += [{"id": $id, "command": $cmd, "description": $desc}]' \
+       "$CHEAT_FILE" > "${CHEAT_FILE}.tmp" && mv "${CHEAT_FILE}.tmp" "$CHEAT_FILE"
+    
+    notify-send "Cheatsheet" "Added: $cmd ✅ (ID: $next_id)"
+    echo "DEBUG: Successfully added to JSON with ID: $next_id" >&2
+}
+
+# --- Edit command in JSON by ID ---
+edit_in_json() {
+    local id="$1"
+    local cmd="$2"
+    local desc="$3"
+    
+    echo "DEBUG: Editing in JSON - id: $id, cmd: '$cmd', desc: '$desc'" >&2
+    
+    # Check if ID exists
+    if ! id_exists "$id"; then
+        echo "ERROR: ID '$id' not found in cheatsheet" >&2
+        notify-send "Cheatsheet Error" "ID not found: $id"
+        return 1
+    fi
+    
+    # Update the entry in JSON by ID
+    jq --argjson id "$id" --arg cmd "$cmd" --arg desc "$desc" \
+       'map(if .id == $id then .command = $cmd | .description = $desc else . end)' \
+       "$CHEAT_FILE" > "${CHEAT_FILE}.tmp" && mv "${CHEAT_FILE}.tmp" "$CHEAT_FILE"
+    
+    notify-send "Cheatsheet" "Updated ID $id ✅"
+    echo "DEBUG: Successfully updated ID: $id" >&2
+}
+
+# --- Delete command from JSON by ID ---
+delete_from_json() {
+    local selection="$1"
+    
+    # Use centralized ID extraction
+    local id_to_delete=$(extract_id "$selection")
+    
+    echo "DEBUG: Raw selection: '$selection'" >&2
+    echo "DEBUG: Extracted ID for deletion: '$id_to_delete'" >&2
+    
+    if [[ -z "$id_to_delete" || ! "$id_to_delete" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: Could not extract valid numeric ID" >&2
+        notify-send "Cheatsheet Error" "Could not extract ID from selection $selection"
+        return 1
+    fi
+    
+    # Check if the ID exists
+    if ! id_exists "$id_to_delete"; then
+        echo "ERROR: ID '$id_to_delete' not found for deletion" >&2
+        notify-send "Cheatsheet Error" "ID not found: $id_to_delete"
+        return 1
+    fi
+    
+    # Get command name for notification (before deletion)
+    local cmd_name=$(get_command_by_id "$id_to_delete" "$selection" | head -c 50)
+    
+    # Delete the entry from JSON by ID
+    jq --argjson id "$id_to_delete" 'del(.[] | select(.id == $id))' \
+       "$CHEAT_FILE" > "${CHEAT_FILE}.tmp" && mv "${CHEAT_FILE}.tmp" "$CHEAT_FILE"
+    
+    notify-send "Cheatsheet" "Deleted ID $id_to_delete: $cmd_name... ✅"
+    echo "DEBUG: Successfully deleted ID: $id_to_delete" >&2
+}
+
+# =============================================================================
+# MENU BUILDING FUNCTIONS
+# =============================================================================
+
+# --- Build static menu (SAFE - no command execution) ---
+build_static_menu() {
+    {
+        printf '%s\n' "$GEMINI_ROW"
+        printf '%s\n' "$COPY_ALL_ROW"
+        # Use while loop to prevent any bash interpretation
+        jq -r '.[] | "[\(.id)] \(.command) ###→ \(.description)"' "$CHEAT_FILE" | while IFS= read -r line; do
+            printf '%s\n' "$line"
+        done
+    } | column -t -s '###'
+}
+
+# =============================================================================
+# SPECIAL COMMAND HANDLERS
+# =============================================================================
+
+# --- Handle /add and /edit commands ---
+handle_special_commands() {
+    local query="$1"
+    
+    # --- Handle /add command ---
+    if [[ "$query" =~ ^/add[[:space:]]+ ]]; then
+        query="${query#/add }"
+        if [[ "$query" =~ ^(.+)[[:space:]]*###[[:space:]]*(.+)$ ]]; then
+            local cmd="${BASH_REMATCH[1]}"
+            cmd=$(echo "$cmd" | xargs)
+            local desc="${BASH_REMATCH[2]}"
+            desc=$(echo "$desc" | xargs)
+            
+            add_to_json "$cmd" "$desc"
+            touch "$RELOAD_FLAG_FILE"
+            build_static_menu
+        else
+            echo "❌ Invalid format. Use: /add <command> ### <description>"
+        fi
+        return 0
+    fi
+
+    # --- Handle /edit command (by ID) ---
+    if [[ "$query" =~ ^/edit[[:space:]]+ ]]; then
+        query="${query#/edit }"
+        # Format: /edit <ID> ### <new_command> ### <new_description>
+        if [[ "$query" =~ ^([0-9]+)[[:space:]]*###[[:space:]]*(.+)[[:space:]]*###[[:space:]]*(.+)$ ]]; then
+            local id="${BASH_REMATCH[1]}"
+            local cmd="${BASH_REMATCH[2]}"
+            cmd=$(echo "$cmd" | xargs)
+            local desc="${BASH_REMATCH[3]}"
+            desc=$(echo "$desc" | xargs)
+            
+            edit_in_json "$id" "$cmd" "$desc"
+            touch "$RELOAD_FLAG_FILE"
+            build_static_menu
+        else
+            echo "❌ Invalid format. Use: /edit <ID> ### <command> ### <description>"
+        fi
+        return 0
+    fi
+    
+    return 1
+}
+
+# --- Handle non-Gemini mode filtering ---
+handle_non_gemini_change() {
+    local query="$1"
+
+    # Handle /add or /edit first
+    handle_special_commands "$query" && return
+
+    # Filter static menu with current query
+    build_static_menu | grep -i --color=never -E "$query"
+}
+
+# =============================================================================
+# GEMINI SEARCH FUNCTIONS
+# =============================================================================
+
+# --- Debounced Gemini Search Wrapper ---
+debounced_gemini_search() {
+    local query="$1"
+    local debounce_delay=2
+
+    # Handle special commands first
+    handle_special_commands "$query" && return
+
+    # --- Handle empty query ---
+    if [[ -z "$query" || "$query" =~ ^[[:space:]]*$ ]]; then
+        echo "DEBUG: Query empty — showing static menu" >&2
+
+        # Cancel any pending debounce job
+        if [[ -f "$DEBOUNCE_PID_FILE" ]]; then
+            old_pid=$(cat "$DEBOUNCE_PID_FILE" 2>/dev/null)
+            if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+                kill "$old_pid" 2>/dev/null || true
+                pkill -P "$old_pid" 2>/dev/null || true
+            fi
+            rm -f "$DEBOUNCE_PID_FILE"
+        fi
+
+        build_static_menu
+        return
+    fi
+
+    # Kill any existing search process
+    if [[ -f "$DEBOUNCE_PID_FILE" ]]; then
+        old_pid=$(cat "$DEBOUNCE_PID_FILE" 2>/dev/null)
+        if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+            echo "DEBUG: Cancelling previous search (PID: $old_pid)" >&2
+            kill "$old_pid" 2>/dev/null || true
+            pkill -P "$old_pid" 2>/dev/null || true
+        fi
+    fi
+
+    # Start new search in background
+    (
+        search_pid=$$
+        echo "$search_pid" > "$DEBOUNCE_PID_FILE"
+
+        printf '⏱️  Will search Gemini in %ds for: "%s"\n' "$debounce_delay" "$query"
+
+        sleep "$debounce_delay"
+
+        current_pid=$(cat "$DEBOUNCE_PID_FILE" 2>/dev/null)
+        if [[ "$search_pid" != "$current_pid" ]]; then
+            echo "DEBUG: Search cancelled (newer search started)" >&2
+            printf '\033[1A\033[K❌ Cancelled - new search started\n'
+            exit 0
+        fi
+
+        printf '\033[1A\033[K🚀 Request sent to Gemini API - Processing: "%s"\n' "$query"
+
+        gemini_results=$(gemini_search "$query")
+
+        printf '\033[1A\033[K%s\n' "$gemini_results"
+
+        if [[ "$search_pid" == "$(cat "$DEBOUNCE_PID_FILE" 2>/dev/null)" ]]; then
+            rm -f "$DEBOUNCE_PID_FILE"
+        fi
+    ) &
+}
+
+# --- Gemini Search Function ---
+gemini_search() {
+    local query="$1"
+
+    if [[ -z "$query" || ${#query} -lt 3 ]]; then
+        return
+    fi
+
+    echo "🔍 Searching with Gemini: '$query'" >&2
+
+    if [[ ! -f "$SYSTEM_PROMPT_FILE" ]]; then
+        echo "ERROR: System prompt file not found!" >&2
+        printf '❌ ERROR: System prompt file not found\n'
+        return
+    fi
+    
+    SYSTEM_PROMPT=$(<"$SYSTEM_PROMPT_FILE")
+    echo "DEBUG: System prompt loaded (${#SYSTEM_PROMPT} chars)" >&2
+
+    JSON_PAYLOAD=$(jq -n \
+                  --arg sp "$SYSTEM_PROMPT" \
+                  --arg q "$query" \
+                  '{contents: [{parts: [{text: $sp}, {text: "User query: " + $q}]}]}')
+
+    echo "DEBUG: Making API call..." >&2
+    API_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+        --max-time 10 \
+        -H 'Content-Type: application/json' \
+        -d "$JSON_PAYLOAD" \
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$GEMINI_API_KEY" 2>&2)
+
+    if [[ $? -eq 143 ]] || [[ $? -eq 130 ]]; then
+        echo "DEBUG: API call was cancelled" >&2
+        printf '❌ Request cancelled - new search started\n'
+        return
+    fi
+
+    HTTP_BODY=$(echo "$API_RESPONSE" | sed '$d')
+    HTTP_STATUS=$(echo "$API_RESPONSE" | tail -n1 | cut -d: -f2)
+
+    echo "DEBUG: HTTP Status: $HTTP_STATUS" >&2
+
+    if [[ "$HTTP_STATUS" -ne 200 ]]; then
+        echo "ERROR: API Error (Status: $HTTP_STATUS)" >&2
+        printf '--- ❌ Gemini API Error (Status: %s) ---\n' "$HTTP_STATUS"
+        return
+    fi
+
+    gemini_output=$(echo "$HTTP_BODY" | jq -r '.candidates[0].content.parts[0].text // empty' 2>&2)
+
+    echo "DEBUG: Gemini output length: ${#gemini_output} chars" >&2
+
+    if [[ -n "$gemini_output" ]]; then
+        # json_content=$(echo "$gemini_output" | sed -n '/``````/p' | sed '1d;$d')
+        json_content=$(echo "$gemini_output" | sed -n '/```json/,/```/p' | sed '1d;$d')
+
+        if [[ -n "$json_content" ]]; then
+            cmd=$(echo "$json_content" | jq -r '.cmd // empty' 2>&2)
+            echo "DEBUG: Parsed cmd: $cmd" >&2
+
+            if [[ -n "$cmd" ]]; then
+                desc=$(jq -r --arg cmd "$cmd" '.[] | select(.command == $cmd) | .description' "$CHEAT_FILE" 2>/dev/null)
+
+                if [[ -n "$desc" ]]; then
+                    printf '💡 %s → %s\n' "$cmd" "$desc"
+                else
+                    gemini_desc=$(echo "$json_content" | jq -r '.description // empty' 2>&2)
+                    gemini_desc="${gemini_desc:-$query}"
+
+                    if [[ -n "$gemini_desc" ]]; then
+                        local next_id=$(get_next_id)
+                        printf "💡 [%s] %s → %s (✨ New from Gemini)\n" "$next_id" "$cmd" "$gemini_desc"
+                    else
+                        printf '💡 %s\n' "$cmd"
+                    fi
+                fi
+            else
+                printf '--- ⚠️ Could not parse command from Gemini response ---\n'
+            fi
+        else
+            printf '--- 🤖 Gemini Suggestions for "%s" ---\n' "$query"
+            echo "$gemini_output" | while IFS= read -r line; do
+                [[ -n "$line" ]] && printf '💡 %s\n' "$line"
+            done
+            printf '--- End Gemini Results ---\n'
+        fi
+    else
+        printf '--- ⚠️ No results from Gemini ---\n'
+    fi
+}
+
+# =============================================================================
+# EXPORT FUNCTIONS AND VARIABLES
+# =============================================================================
+
+export -f extract_id
+export -f get_next_id
+export -f get_command_by_id
+export -f get_description_by_id
+export -f id_exists
+export -f gemini_search
+export -f debounced_gemini_search
+export -f build_static_menu
+export -f add_to_json
+export -f edit_in_json
+export -f delete_from_json
+export -f handle_special_commands
+export -f handle_non_gemini_change
+export GEMINI_API_KEY
+export SYSTEM_PROMPT_FILE
+export LOG_FILE
+export DEBOUNCE_PID_FILE
+export CHEAT_FILE
+export GEMINI_ROW
+export COPY_ALL_ROW
+export RELOAD_FLAG_FILE
+
+# =============================================================================
+# FZF CONFIGURATION
+# =============================================================================
+
+fzf_common_args=(
+  --preview '
+    selection={};
+    if [[ ! "$selection" =~ (⏱️|🚀|❌) ]]; then
+      # Use centralized extract_id function
+      id=$(extract_id "$selection")
+      
+      if [[ -n "$id" ]] && [[ "$id" =~ ^[0-9]+$ ]]; then
+        # Get data by ID using helper functions
+        cmd=$(get_command_by_id "$id" "$selection")
+        description=$(get_description_by_id "$id" "$selection")
+        
+        printf "🆔 ID: %s\n" "$id"
+        printf "📝 Description: %s\n" "$description"
+        printf "\n\n"
+        
+        # Extract first word for man page (safely)
+        main_cmd=$(printf "%s" "$cmd" | awk "{print \$1}" | sed "s/^sudo //")
+        if [[ "$selection" != *"Search with Gemini API"* && "$selection" != *"Copy all cheat"* ]]; then
+          printf "📖 Man Page: %s\n\n" "$main_cmd"
+          man "$main_cmd" 2>/dev/null || printf "No manual entry for %s\n" "$main_cmd"
+        fi
+      fi
+    fi'
+  --preview-label='[ID] Desc + man | alt-p: toggle | ctrl-e: edit | ctrl-d: delete'
+  --preview-label-pos='bottom'
+  --preview-window 'down:65%:wrap'
+  --bind 'alt-p:toggle-preview'
+  --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
+  --bind 'alt-k:preview-up,alt-j:preview-down'
+  --bind 'ctrl-e:transform-query(id=$(extract_id "{}"); jq -r --argjson id "$id" ".[] | select(.id == \$id) | \"/edit \" + (.id|tostring) + \" ### \" + .command + \" ### \" + .description" "'"$CHEAT_FILE"'")'
+  --bind 'ctrl-D:execute(delete_from_json "{}" 2>>"'"$LOG_FILE"'")+reload(build_static_menu)'
+  --color 'pointer:green,marker:green'
+  --no-multi
+  --header 'Enter: copy | /add <cmd> ### <desc> | Ctrl-e: edit | Ctrl-d: delete'
+)
+
+# --- FZF with dynamic reload based on mode ---
+if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
+    fzf_args=(
+      "${fzf_common_args[@]}"
+      --disabled
+      --bind "start:reload:build_static_menu"
+      --bind "change:reload:debounced_gemini_search {q} 2>>$LOG_FILE || true"
+      --prompt '🤖 Gemini Search> '
+      --ansi
+      --header-lines=0
+    )
+else
+    fzf_args=(
+      "${fzf_common_args[@]}"
+      --disabled
+      --bind "start:reload:build_static_menu"
+      --bind "change:reload:handle_non_gemini_change {q} 2>>$LOG_FILE || true"
+      --prompt 'Cheatsheet> '
+    )
+fi
+
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+
+# Ensure flag file does not exist before starting fzf
+rm -f "$RELOAD_FLAG_FILE"
+
+selection=$(fzf "${fzf_args[@]}")
+
+# Cleanup files on exit
+rm -f "$DEBOUNCE_PID_FILE"
+
+# Exit if no selection
+if [[ -z "$selection" ]]; then
+    echo "DEBUG: No selection made. Exiting."
+    if [ -f "$RELOAD_FLAG_FILE" ]; then
+        rm -f "$RELOAD_FLAG_FILE"
+        exec "$0"
+    fi
+    exit
+fi
+
+echo "DEBUG: User selected: '$selection'"
+
+# Check for reload flag
+if [ -f "$RELOAD_FLAG_FILE" ]; then
+    rm -f "$RELOAD_FLAG_FILE"
+    exec "$0"
+fi
+
+# Handle Gemini toggle
+if [[ "$selection" =~ "Search with Gemini API" ]]; then
+    echo "DEBUG: Handling Gemini toggle."
+    if [[ "$SEARCH_WITH_GEMINI" == "true" ]]; then
+        sed -i 's/SEARCH_WITH_GEMINI *= *.*/SEARCH_WITH_GEMINI="false"/' "$CONFIG_FILE"
+        notify-send "Cheatsheet" "Gemini search disabled ✅"
+    else
+        sed -i 's/SEARCH_WITH_GEMINI *= *.*/SEARCH_WITH_GEMINI="true"/' "$CONFIG_FILE"
+        notify-send "Cheatsheet" "Gemini search enabled ✅"
+    fi
+    exec "$0"
+fi
+
+# Handle copy all cheats
+if [[ "$selection" =~ ^"Copy all cheat" ]]; then
+    echo "DEBUG: Handling 'Copy all cheats'."
+    jq '.' "$CHEAT_FILE" | wl-copy
+    notify-send "Cheatsheet" "All cheats copied to clipboard ✅"
+    exit
+fi
+
+# =============================================================================
+# COPY COMMAND BY ID (SAFE - NO EXECUTION)
+# =============================================================================
+
+# Use centralized extract_id function
+selected_id=$(extract_id "$selection")
+
+if [[ -n "$selected_id" ]] && [[ "$selected_id" =~ ^[0-9]+$ ]]; then
+    echo "DEBUG: Selected ID: $selected_id"
+    
+    # Get command by ID using helper function (SAFE)
+    command=$(get_command_by_id "$selected_id" "$selection")
+    description=$(get_description_by_id "$selected_id" "$selection")
+    
+    if [[ -n "$command" ]]; then
+        # Copy safely without expansion - use printf, not echo
+        printf '%s' "$command" | wl-copy
+        if [[ "$selection" =~ "New from Gemini" ]]; then
+            add_to_json "$command" "$description"
+        fi
+        notify-send "Cheatsheet" "Command copied (ID: $selected_id) ✅"
+        echo "DEBUG: Copied command for ID $selected_id" >&2
+    else
+        echo "ERROR: Command not found for ID: $selected_id" >&2
+        notify-send "Cheatsheet Error" "Command not found for ID: $selected_id"
+    fi
+fi
+
+echo "--- Script finished at $(date) ---"
+set +x
