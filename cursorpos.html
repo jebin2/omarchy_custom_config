@@ -232,23 +232,49 @@
             border-radius: 10px;
             font-size: 13px;
             border: 2px solid rgba(255, 255, 255, 0.1);
+            width: 350px;
+            /* NEW: Set a fixed width for better layout */
         }
 
         .stat-item {
-            margin: 5px 0;
+            margin: 8px 0;
+            /* NEW: Increased margin */
             display: flex;
             justify-content: space-between;
             gap: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            /* NEW: Separator */
+            padding-bottom: 8px;
+        }
+
+        .stat-item:last-child {
+            border-bottom: none;
+            /* NEW: Remove border for last item */
         }
 
         .stat-label {
             opacity: 0.7;
+            white-space: nowrap;
+            /* NEW: Prevent label from wrapping */
         }
 
         .stat-value {
             font-weight: bold;
-            color: #667eea;
+            color: #8A9DFF;
+            /* NEW: Softer color */
+            text-align: right;
+            /* NEW: Align values to the right */
         }
+
+        /* NEW: Style for the fun fact */
+        #funFact {
+            font-style: italic;
+            color: #a2b0ff;
+            text-align: center;
+            display: block;
+            width: 100%;
+        }
+
 
         #loading {
             position: absolute;
@@ -330,24 +356,38 @@
             <button class="btn" id="exportBtn">💾 Screenshot</button>
         </div>
 
+        <!-- UPDATED: Stats Panel with new fields -->
         <div id="stats" style="display: none;">
             <div class="stat-item">
-                <span class="stat-label">Points:</span>
+                <span class="stat-label">Points Logged:</span>
                 <span class="stat-value" id="pointCount">0</span>
             </div>
             <div class="stat-item">
-                <span class="stat-label">Duration:</span>
+                <span class="stat-label">Session Duration:</span>
                 <span class="stat-value" id="duration">0s</span>
             </div>
             <div class="stat-item">
-                <span class="stat-label">Distance:</span>
+                <span class="stat-label">Pixel Distance:</span>
                 <span class="stat-value" id="distance">0px</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Est. Real Distance:</span>
+                <span class="stat-value" id="realDistance">0m</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Avg. Speed:</span>
+                <span class="stat-value" id="avgSpeed">0 px/s</span>
             </div>
             <div class="stat-item">
                 <span class="stat-label">Progress:</span>
                 <span class="stat-value" id="progress">0%</span>
             </div>
+            <div class="stat-item">
+                <span class="stat-label">💡 Fun Fact:</span>
+                <span class="stat-value" id="funFact">Load a file!</span>
+            </div>
         </div>
+
 
         <div id="loading">
             <div class="spinner"></div>
@@ -453,25 +493,24 @@
         }
 
         function createRibbonVisualization(points) {
-            const thickness = parseFloat(document.getElementById('thicknessSlider').value);
-            const curve = new THREE.CatmullRomCurve3(points.map(p => new THREE.Vector3(p.x, -p.y, p.z)));
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(points.length * 3);
+            const colors = new Float32Array(points.length * 3);
 
-            const segments = Math.min(points.length * 2, 20000);
-            const tubeGeometry = new THREE.TubeGeometry(curve, segments, thickness, 8, false);
-            tubeGeometry.setDrawRange(0, Infinity);
+            points.forEach((p, i) => {
+                positions.set([p.x, -p.y, p.z], i * 3);
+                const color = new THREE.Color().setHSL(i / points.length, 0.8, 0.6);
+                colors.set([color.r, color.g, color.b], i * 3);
+            });
 
-            const material = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 100 });
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.setDrawRange(0, Infinity); // Show all by default
 
-            const colors = [];
-            for (let i = 0; i < tubeGeometry.attributes.position.count; i++) {
-                const t = i / tubeGeometry.attributes.position.count;
-                colors.push(new THREE.Color().setHSL(t, 0.8, 0.6).r, new THREE.Color().setHSL(t, 0.8, 0.6).g, new THREE.Color().setHSL(t, 0.8, 0.6).b);
-            }
-            tubeGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-
-            const tube = new THREE.Mesh(tubeGeometry, material);
-            scene.add(tube);
-            visualizationObjects.push(tube);
+            const material = new THREE.LineBasicMaterial({ vertexColors: true, linewidth: 5 });
+            const line = new THREE.Line(geometry, material);
+            scene.add(line);
+            visualizationObjects.push(line);
         }
 
         function createParticlesVisualization(points) {
@@ -566,49 +605,97 @@
         }
 
         function updatePlaybackVisualization() {
-            const pointsToShow = Math.floor(currentFrame);
-            if (visualizationObjects.length === 0) return;
+            if (cursorData.length < 2 || visualizationObjects.length === 0) return;
 
             const style = document.getElementById('styleSelectWrapper').dataset.value;
+            const pointsToShow = Math.max(1, Math.min(Math.floor(currentFrame), cursorData.length));
 
-            if (style === 'ribbon' || style === 'particles' || style === 'lightning') {
+            if (style === 'ribbon' || style === 'lightning') {
                 const geometry = visualizationObjects[0].geometry;
-                const totalVertices = geometry.attributes.position.count;
-                let verticesToShow = style === 'ribbon' ? Math.floor(pointsToShow * (totalVertices / cursorData.length)) : pointsToShow;
-                geometry.setDrawRange(0, verticesToShow);
+                geometry.setDrawRange(0, pointsToShow);
+            } else if (style === 'particles') {
+                const geometry = visualizationObjects[0].geometry;
+                geometry.setDrawRange(0, pointsToShow);
             } else if (style === 'tubes') {
-                visualizationObjects.forEach((tube, i) => tube.visible = (i < pointsToShow - 1));
+                visualizationObjects.forEach((obj, i) => {
+                    obj.visible = (i < pointsToShow - 1);
+                });
             }
         }
 
-        function updateStats() {
-            if (cursorData.length === 0) return;
+        // --- UPDATED: updateStats now takes raw data and calculates everything ---
+        function updateStats(rawPoints) {
+            if (rawPoints.length < 2) return;
 
-            document.getElementById('pointCount').textContent = cursorData.length;
-            const duration = (cursorData[cursorData.length - 1].timestamp - cursorData[0].timestamp) / 1000;
-            document.getElementById('duration').textContent = duration.toFixed(2) + 's';
+            const pointCount = rawPoints.length;
+            const duration = (rawPoints[rawPoints.length - 1].timestamp - rawPoints[0].timestamp) / 1000;
 
-            let totalDistance = 0;
-            for (let i = 1; i < cursorData.length; i++) {
-                totalDistance += Math.hypot(cursorData[i].x - cursorData[i - 1].x, cursorData[i].y - cursorData[i - 1].y);
+            let totalPixelDistance = 0;
+            for (let i = 1; i < rawPoints.length; i++) {
+                totalPixelDistance += Math.hypot(rawPoints[i].x - rawPoints[i - 1].x, rawPoints[i].y - rawPoints[i - 1].y);
             }
-            document.getElementById('distance').textContent = Math.round(totalDistance) + ' units';
+
+            // --- NEW: Quirky Facts Calculation ---
+            // Assume a standard monitor DPI (pixels per inch) to estimate real distance. 96 is a common value.
+            const DPI = 96;
+            const METERS_PER_INCH = 0.0254;
+            const metersMoved = (totalPixelDistance / DPI) * METERS_PER_INCH;
+            const avgSpeed = duration > 0 ? totalPixelDistance / duration : 0; // pixels per second
+
+            let funFact = "That's a lot of wiggling!";
+            if (metersMoved > 1) {
+                const numSnails = (metersMoved / 1.3).toFixed(1); // Avg snail travels 1.3m per hour
+                funFact = `You moved further than ${numSnails} snails in an hour!`;
+            }
+            if (metersMoved > 50) {
+                funFact = `That's longer than an Olympic swimming pool!`;
+            }
+            if (metersMoved > 1000) {
+                const km = (metersMoved / 1000).toFixed(2);
+                funFact = `You covered ${km} km. Time for a marathon!`;
+            }
+
+            // --- Update DOM Elements ---
+            document.getElementById('pointCount').textContent = pointCount.toLocaleString();
+            document.getElementById('duration').textContent = duration.toFixed(2) + 's';
+            document.getElementById('distance').textContent = Math.round(totalPixelDistance).toLocaleString() + 'px';
+            document.getElementById('realDistance').textContent = metersMoved.toFixed(2) + 'm';
+            document.getElementById('avgSpeed').textContent = Math.round(avgSpeed).toLocaleString() + ' px/s';
+            document.getElementById('funFact').textContent = funFact;
+
             document.getElementById('stats').style.display = 'block';
         }
+
 
         function handleFile(file) {
             document.getElementById('loading').style.display = 'block';
             isPlaying = false;
+            currentFrame = 0; // Reset frame count on new file
 
             const reader = new FileReader();
             reader.onload = (e) => {
-                cursorData = normalizePoints(parseLogFile(e.target.result));
+                const rawPoints = parseLogFile(e.target.result);
+                if (rawPoints.length < 2) {
+                    alert("Not enough data points in the file.");
+                    document.getElementById('loading').style.display = 'none';
+                    return;
+                }
+
+                // NEW: Calculate stats based on raw data first
+                updateStats(rawPoints);
+
+                // Then normalize for visualization
+                cursorData = normalizePoints(rawPoints);
+
                 updateVisualization();
-                updateStats();
                 controls.reset();
+                camera.position.set(0, 20, 100); // Reset camera position
+                controls.update();
+
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('playBtn').disabled = cursorData.length < 2;
                 document.getElementById('pauseBtn').disabled = true;
+                document.getElementById('progress').textContent = '0%';
             };
             reader.readAsText(file);
         }
@@ -680,7 +767,8 @@
                 controls.reset();
                 currentFrame = 0;
                 isPlaying = false;
-                if (visualizationObjects.length > 0) updateVisualization();
+                updatePlaybackVisualization(); // Update visual to frame 0
+                document.getElementById('progress').textContent = '0%';
                 document.getElementById('playBtn').disabled = cursorData.length < 2;
                 document.getElementById('pauseBtn').disabled = true;
             });
