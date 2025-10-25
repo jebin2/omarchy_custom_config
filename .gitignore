@@ -1,3 +1,4 @@
 clock/target
 HyprlandWindowSwitcher/target
 .env
+*.log

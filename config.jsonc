@@ -2,6 +2,7 @@
   "modules-left": ["custom/window-title"],
   "modules-right": [
     "custom/fish",
+    "custom/cursorpos",
     "custom/cc",
     "custom/nekoviewer",
     "custom/tailscale",
@@ -47,7 +48,7 @@
   },
   "custom/fish": {
     "exec": "/home/jebin/git/omarchy_custom_config/fish_anim.sh",
-    "restart-interval": 1,  // Keep it alive
+    "return-type": "plain",
     "tooltip": false
   },
   "custom/cc": {
@@ -57,5 +58,11 @@
     "format": {},
     "on-click": "/home/jebin/git/omarchy_custom_config/captioncreator.sh 2",
     "tooltip-format": "localhost:3000"
+  },
+  "custom/cursorpos": {
+    "exec": "/home/jebin/git/omarchy_custom_config/cursorpos.sh",
+    "return-type": "plain",
+    "format": "{}",
+    "tooltip": false
   }
 }
