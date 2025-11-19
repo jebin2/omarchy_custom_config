@@ -46,7 +46,7 @@ if [[ "$choice" == "1" ]]; then
     warp-cli --accept-tos connect
 
     warp-cli --accept-tos status
-    echo "Visit: https://one.one.one.one/help/"
+    echo "Visit1️⃣: https://one.one.one.one/help/"
     exit 0
 fi
 
@@ -62,7 +62,7 @@ if [[ "$choice" == "2" ]]; then
     fi
 
     echo "WARP is now OFF."
-    echo "Visit: https://one.one.one.one/help/"
+    echo "Visit1️⃣: https://one.one.one.one/help/"
     exit 0
 fi
 
