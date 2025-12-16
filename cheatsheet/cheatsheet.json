@@ -48,5 +48,10 @@
     "id": 10,
     "command": "history",
     "description": "How to show history in terminal"
+  },
+  {
+    "id": 11,
+    "command": "docker stop $(docker ps -aq)",
+    "description": "command to stop all docker"
   }
 ]
