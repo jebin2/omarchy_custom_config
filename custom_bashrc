@@ -1,0 +1,110 @@
+# source ~/.custom_bashrc
+penv() {
+  # --- Delete mode ---
+  if [[ "$1" == "-d" ]]; then
+    if [ -z "$2" ]; then
+      echo "❌ Usage: penv -d <env_name>"
+      return 1
+    fi
+    ENV_NAME="${2}_env"
+    if pyenv virtualenvs --bare | grep -qx "$ENV_NAME"; then
+      read -p "Are you sure you want to delete '$ENV_NAME'? (y/n) " -n 1 -r
+      echo
+      if [[ $REPLY =~ ^[Yy]$ ]]; then
+        pyenv uninstall -f "$ENV_NAME"
+        echo "✅ Virtual environment '$ENV_NAME' deleted"
+      else
+        echo "❎ Aborted"
+      fi
+    else
+      echo "⚠️ No such environment: $ENV_NAME"
+    fi
+    return 0
+  fi
+
+  # --- Env name from arg or current dir ---
+  if [ -n "$1" ]; then
+    ENV_NAME="${1}_env"
+  else
+    CURR_DIR=$(basename "$PWD")
+    ENV_NAME="${CURR_DIR}_env"
+  fi
+
+  # --- Already active? ---
+  if [ "$PYENV_VERSION" = "$ENV_NAME" ]; then
+    echo "⚡ '$ENV_NAME' is already active"
+    echo "Current Python: $(pyenv which python)"
+    return 0
+  fi
+
+  # --- Deactivate any active env ---
+  if [ -n "$PYENV_VERSION" ]; then
+    pyenv deactivate
+    echo "Deactivated '$PYENV_VERSION'"
+  fi
+
+  # --- Detect local Python version or fallback ---
+  LOCAL_VERSION=$(pyenv local 2>/dev/null || true)
+  if [ -n "$LOCAL_VERSION" ]; then
+    PY_VERSION="$LOCAL_VERSION"
+  else
+    PY_VERSION="3.10.12"
+  fi
+
+  # --- Create env if missing ---
+  if ! pyenv virtualenvs --bare | grep -qx "$ENV_NAME"; then
+    echo "Creating new environment '$ENV_NAME' with Python $PY_VERSION"
+    pyenv virtualenv "$PY_VERSION" "$ENV_NAME"
+  else
+    echo "Virtual environment '$ENV_NAME' already exists"
+  fi
+
+  # --- Activate ---
+  pyenv activate "$ENV_NAME"
+  echo "✅ Activated '$ENV_NAME'"
+  echo "Current Python: $(pyenv which python)"
+}
+
+
+
+
+set_env_and_title() {
+  # Colors (always wrapped in \[...\])
+  local RESET="\[\e[0m\]"
+  local GREEN="\[\e[32m\]"
+  local BLUE="\[\e[34m\]"
+  local CYAN="\[\e[36m\]"
+  local YELLOW="\[\e[33m\]"
+
+  # Virtualenv prefix
+  if [[ -n "$VIRTUAL_ENV" ]]; then
+    env_name="${GREEN}(${VIRTUAL_ENV##*/})${RESET} "
+    env_plain="(${VIRTUAL_ENV##*/}) "
+  else
+    env_name=""
+    env_plain=""
+  fi
+
+  # Git branch
+  branch=""
+  branch_plain=""
+  if command -v git &>/dev/null; then
+    branch_val=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [[ -n "$branch_val" ]]; then
+      branch=" ${YELLOW}${branch_val}${RESET}"
+      branch_plain=" ${branch_val}"
+    fi
+  fi
+
+  # Directory name
+  dir="${BLUE}${PWD##*/}${RESET}"
+  dir_plain="${PWD##*/}"
+
+  # Prompt
+  PS1="${env_name}${dir}${branch} ${CYAN}${RESET} ❯ "
+
+  # Title (no colors, only plain text)
+  echo -ne "\033]0;${env_plain}${dir_plain}${branch_plain}\007"
+}
+
+PROMPT_COMMAND="set_env_and_title"
