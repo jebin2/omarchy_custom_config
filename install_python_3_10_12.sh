@@ -98,7 +98,7 @@ if [ "$IS_FISH" = true ]; then
 
 # >>> pyenv setup >>>
 set -x PYENV_ROOT $HOME/.pyenv
-fish_add_path $PYENV_ROOT/bin
+set -x PATH $PYENV_ROOT/bin $PATH
 if command -v pyenv > /dev/null
     pyenv init - fish | source
     pyenv virtualenv-init - fish | source

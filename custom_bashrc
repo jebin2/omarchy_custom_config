@@ -65,9 +65,6 @@ penv() {
   echo "Current Python: $(pyenv which python)"
 }
 
-
-
-
 set_env_and_title() {
   # Colors (always wrapped in \[...\])
   local RESET="\[\e[0m\]"
@@ -101,13 +98,14 @@ set_env_and_title() {
   dir_plain="${PWD##*/}"
 
   # Prompt
-  PS1="${env_name}${dir}${branch} ${CYAN}${RESET} ❯ "
+  PS1="${env_name}${dir}${branch} ${CYAN}\[\e[0m\] ❯ "
 
   # Title (no colors, only plain text)
   echo -ne "\033]0;${env_plain}${dir_plain}${branch_plain}\007"
 }
 
 PROMPT_COMMAND="set_env_and_title"
+
 
 penvd() {
   if [ -n "$PYENV_VERSION" ]; then
