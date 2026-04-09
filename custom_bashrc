@@ -109,6 +109,16 @@ set_env_and_title() {
 
 PROMPT_COMMAND="set_env_and_title"
 
+penvd() {
+  if [ -n "$PYENV_VERSION" ]; then
+    echo "Deactivating '$PYENV_VERSION'..."
+    pyenv deactivate
+    echo "✅ Deactivated"
+  else
+    echo "⚠️ No active pyenv environment"
+  fi
+}
+
 docker-nuke() {
     echo "⚠️  FULL DOCKER WIPE INITIATED"
     echo "--------------------------------"

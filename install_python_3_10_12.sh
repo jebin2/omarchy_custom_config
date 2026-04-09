@@ -8,6 +8,14 @@ CUSTOM_RC="$HOME/.custom_bashrc"
 LOCAL_CUSTOM_RC="./custom_bashrc"
 BASHRC="$HOME/.bashrc"
 
+# Detect if fish is the default shell
+FISH_CONFIG="$HOME/.config/fish/config.fish"
+FISH_FUNCTIONS_DIR="$HOME/.config/fish/functions"
+IS_FISH=false
+if echo "$SHELL" | grep -q "fish"; then
+    IS_FISH=true
+fi
+
 echo ">>> Detecting OS..."
 
 if command -v pacman >/dev/null 2>&1; then
@@ -28,8 +36,8 @@ echo ">>> Installing dependencies..."
 
 if [ "$OS" = "arch" ]; then
     sudo pacman -S --needed --noconfirm \
-        base-devel openssl zlib xz tk readline sqlite libffi \
-        bzip2 gcc make patch curl git
+    base-devel openssl xz tk readline sqlite libffi \
+    bzip2 gcc make patch curl git
 
 elif [ "$OS" = "ubuntu" ]; then
     sudo apt update
@@ -42,7 +50,7 @@ elif [ "$OS" = "ubuntu" ]; then
 fi
 
 # ----------------------------
-# Copy .custom_bashrc
+# Copy .custom_bashrc (bash)
 # ----------------------------
 if [ -f "$LOCAL_CUSTOM_RC" ]; then
     echo ">>> Copying custom_bashrc to home..."
@@ -67,6 +75,43 @@ else
 fi
 
 # ----------------------------
+# Fish shell setup
+# ----------------------------
+if [ "$IS_FISH" = true ]; then
+    echo ">>> Fish shell detected — installing fish functions..."
+    mkdir -p "$FISH_FUNCTIONS_DIR"
+
+    for f in penv.fish penvd.fish docker-nuke.fish; do
+        if [ -f "./$f" ]; then
+            cp "./$f" "$FISH_FUNCTIONS_DIR/$f"
+            echo "✔ Installed $f -> $FISH_FUNCTIONS_DIR/$f"
+        else
+            echo "⚠️  ./$f not found, skipping"
+        fi
+    done
+
+    echo ">>> Configuring pyenv in fish config..."
+    mkdir -p "$(dirname "$FISH_CONFIG")"
+    touch "$FISH_CONFIG"
+    if ! grep -q 'pyenv init' "$FISH_CONFIG" 2>/dev/null; then
+        cat << 'EOF' >> "$FISH_CONFIG"
+
+# >>> pyenv setup >>>
+set -x PYENV_ROOT $HOME/.pyenv
+fish_add_path $PYENV_ROOT/bin
+if command -v pyenv > /dev/null
+    pyenv init - fish | source
+    pyenv virtualenv-init - fish | source
+end
+# <<< pyenv setup <<<
+EOF
+        echo "✔ pyenv added to fish config"
+    else
+        echo "✔ pyenv already in fish config"
+    fi
+fi
+
+# ----------------------------
 # Install pyenv
 # ----------------------------
 echo ">>> Installing pyenv..."
@@ -78,12 +123,13 @@ else
 fi
 
 # ----------------------------
-# Configure pyenv in .custom_bashrc
+# Configure pyenv in .custom_bashrc (bash only)
 # ----------------------------
-echo ">>> Configuring pyenv in ~/.custom_bashrc..."
+if [ "$IS_FISH" = false ]; then
+    echo ">>> Configuring pyenv in ~/.custom_bashrc..."
 
-if ! grep -q 'pyenv init' "$CUSTOM_RC" 2>/dev/null; then
-cat << 'EOF' >> "$CUSTOM_RC"
+    if ! grep -q 'pyenv init' "$CUSTOM_RC" 2>/dev/null; then
+    cat << 'EOF' >> "$CUSTOM_RC"
 
 # >>> pyenv setup >>>
 export PYENV_ROOT="$HOME/.pyenv"
@@ -94,13 +140,18 @@ eval "$(pyenv virtualenv-init -)"
 fi
 # <<< pyenv setup <<<
 EOF
+    fi
 fi
 
 # ----------------------------
 # Load environment
 # ----------------------------
-echo ">>> Reloading ~/.custom_bashrc..."
-source "$CUSTOM_RC"
+echo ">>> Reloading environment..."
+export PYENV_ROOT="$HOME/.pyenv"
+export PATH="$PYENV_ROOT/bin:$PATH"
+if [ "$IS_FISH" = false ]; then
+    source "$CUSTOM_RC"
+fi
 
 # ----------------------------
 # Install Python
