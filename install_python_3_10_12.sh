@@ -129,8 +129,7 @@ if [ "$IS_FISH" = false ]; then
     echo ">>> Configuring pyenv in ~/.custom_bashrc..."
 
     if ! grep -q 'pyenv init' "$CUSTOM_RC" 2>/dev/null; then
-    cat << 'EOF' >> "$CUSTOM_RC"
-
+    cat << 'EOF' > /tmp/pyenv_setup.txt
 # >>> pyenv setup >>>
 export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
@@ -139,7 +138,9 @@ eval "$(pyenv init -)"
 eval "$(pyenv virtualenv-init -)"
 fi
 # <<< pyenv setup <<<
+
 EOF
+    cat /tmp/pyenv_setup.txt "$CUSTOM_RC" > "$CUSTOM_RC.tmp" && mv "$CUSTOM_RC.tmp" "$CUSTOM_RC"
     fi
 fi
 
