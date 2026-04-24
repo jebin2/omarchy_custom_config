@@ -9,7 +9,14 @@ penv() {
     echo ""
     echo "Options:"
     echo "  -h, --help      Show this help message and exit"
+    echo "  -l, --list      List all virtual environments"
     echo "  -d <env_name>   Delete the specified virtual environment"
+    return 0
+  fi
+
+  # --- List mode ---
+  if [[ "$1" == "-l" ]] || [[ "$1" == "--list" ]]; then
+    pyenv virtualenvs
     return 0
   fi
 

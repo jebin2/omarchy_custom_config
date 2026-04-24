@@ -8,7 +8,14 @@ function penv
         echo ""
         echo "Options:"
         echo "  -h, --help      Show this help message and exit"
+        echo "  -l, --list      List all virtual environments"
         echo "  -d <env_name>   Delete the specified virtual environment"
+        return 0
+    end
+
+    # --- List mode ---
+    if test "$argv[1]" = "-l" -o "$argv[1]" = "--list"
+        pyenv virtualenvs
         return 0
     end
 
