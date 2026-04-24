@@ -69,13 +69,14 @@ elif [ "$OS" = "macos" ]; then
 fi
 
 # ----------------------------
-# Copy .custom_bashrc (bash)
+# Copy .custom_bashrc (bash/zsh)
 # ----------------------------
 if [ -f "$LOCAL_CUSTOM_RC" ]; then
     echo ">>> Copying custom_bashrc to home..."
     cp "$LOCAL_CUSTOM_RC" "$CUSTOM_RC"
 else
-    echo "⚠️  No .custom_bashrc found in current directory"
+    echo ">>> Downloading custom_bashrc from GitHub..."
+    curl -fsSL "https://raw.githubusercontent.com/jebin2/omarchy_custom_config/main/custom_bashrc" -o "$CUSTOM_RC"
 fi
 
 # ----------------------------
@@ -105,7 +106,9 @@ if [ "$IS_FISH" = true ]; then
             cp "./$f" "$FISH_FUNCTIONS_DIR/$f"
             echo "✔ Installed $f -> $FISH_FUNCTIONS_DIR/$f"
         else
-            echo "⚠️  ./$f not found, skipping"
+            echo ">>> Downloading $f from GitHub..."
+            curl -fsSL "https://raw.githubusercontent.com/jebin2/omarchy_custom_config/main/$f" -o "$FISH_FUNCTIONS_DIR/$f"
+            echo "✔ Installed $f -> $FISH_FUNCTIONS_DIR/$f"
         fi
     done
 
