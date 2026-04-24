@@ -46,7 +46,10 @@ function penv
     if test -n "$LOCAL_VERSION"
         set PY_VERSION "$LOCAL_VERSION"
     else
-        set PY_VERSION "3.10.12"
+        set PY_VERSION (pyenv global 2>/dev/null | head -n 1; or echo "")
+        if test -z "$PY_VERSION" -o "$PY_VERSION" = "system"
+            set PY_VERSION "3.10.12"
+        end
     end
 
     # --- Create env if missing ---

@@ -48,7 +48,10 @@ penv() {
   if [ -n "$LOCAL_VERSION" ]; then
     PY_VERSION="$LOCAL_VERSION"
   else
-    PY_VERSION="3.10.12"
+    PY_VERSION=$(pyenv global 2>/dev/null | head -n 1)
+    if [ -z "$PY_VERSION" ] || [ "$PY_VERSION" = "system" ]; then
+      PY_VERSION="3.10.12"
+    fi
   fi
 
   # --- Create env if missing ---
