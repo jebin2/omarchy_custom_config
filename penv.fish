@@ -7,10 +7,15 @@ function penv
         echo "If no env_name is provided, it uses the current directory name appended with '_env'."
         echo ""
         echo "Options:"
-        echo "  -h, --help      Show this help message and exit"
-        echo "  -l, --list      List all virtual environments"
-        echo "  -d <env_name>   Delete the specified virtual environment"
-        echo "  -x, --deactivate Deactivate the current environment (or use 'penvd')"
+        echo "  -h, --help           Show this help message and exit"
+        echo "  -l, --list           List all virtual environments"
+        echo "  -d <env_name>        Delete the specified virtual environment"
+        echo "  -x, --deactivate     Deactivate the current environment (or use 'penvd')"
+        echo "  -C, --clear-envs     Delete ALL virtual environments"
+        echo "  -V, --clear-versions Delete ALL installed base Python versions"
+        echo "  -i, --install <ver>  Install a specific Python version"
+        echo "  -g, --global <ver>   Set the global Python version"
+        echo "  -s, --set-local      Set the local Python version to the active environment"
         return 0
     end
 
@@ -48,6 +53,99 @@ function penv
         return 0
     end
 
+    # --- Set local mode ---
+    if test "$argv[1]" = "-s" -o "$argv[1]" = "--set-local"
+        set ENV_TO_SET "$argv[2]"
+        if test -z "$ENV_TO_SET"
+            set ENV_TO_SET (pyenv version-name)
+            if test "$ENV_TO_SET" = "system"
+                echo "⚠️ No pyenv environment active. Specify an environment or activate one first."
+                return 1
+            end
+        end
+        if not string match -qr '_env$' -- "$ENV_TO_SET"
+            if not pyenv virtualenvs --bare | grep -qx -- "$ENV_TO_SET"
+                if pyenv virtualenvs --bare | grep -qx -- "${ENV_TO_SET}_env"
+                    set ENV_TO_SET "${ENV_TO_SET}_env"
+                end
+            end
+        end
+        echo "Setting local pyenv version to '$ENV_TO_SET' in current directory..."
+        pyenv local "$ENV_TO_SET"
+        echo "✅ Local version set."
+        return 0
+    end
+
+    # --- Clear envs mode ---
+    if test "$argv[1]" = "-C" -o "$argv[1]" = "--clear-envs"
+        set ENVS (pyenv virtualenvs --bare | grep '_env$')
+        if test -z "$ENVS"
+            echo "No virtual environments found."
+            return 0
+        end
+        echo "The following virtual environments will be DELETED:"
+        for env in $ENVS
+            echo "  - $env"
+        end
+        read -P "Are you sure? (y/n) " -n 1 choice
+        echo
+        if string match -qr '^[Yy]$' -- "$choice"
+            for env in $ENVS
+                pyenv uninstall -f "$env"
+            end
+            echo "✅ All virtual environments deleted."
+        else
+            echo "❎ Aborted"
+        end
+        return 0
+    end
+
+    # --- Clear versions mode ---
+    if test "$argv[1]" = "-V" -o "$argv[1]" = "--clear-versions"
+        set VERSIONS (pyenv versions --bare | grep -v '_env$' | grep -E '^[0-9]')
+        if test -z "$VERSIONS"
+            echo "No base Python versions found."
+            return 0
+        end
+        echo "The following base Python versions will be DELETED:"
+        for ver in $VERSIONS
+            echo "  - $ver"
+        end
+        read -P "Are you sure? (y/n) " -n 1 choice
+        echo
+        if string match -qr '^[Yy]$' -- "$choice"
+            for ver in $VERSIONS
+                pyenv uninstall -f "$ver"
+            end
+            echo "✅ All base Python versions deleted."
+        else
+            echo "❎ Aborted"
+        end
+        return 0
+    end
+
+    # --- Install mode ---
+    if test "$argv[1]" = "-i" -o "$argv[1]" = "--install"
+        if test -z "$argv[2]"
+            echo "❌ Usage: penv -i <version>"
+            return 1
+        end
+        echo "Installing Python $argv[2]..."
+        pyenv install "$argv[2]"
+        return 0
+    end
+
+    # --- Global mode ---
+    if test "$argv[1]" = "-g" -o "$argv[1]" = "--global"
+        if test -z "$argv[2]"
+            echo "❌ Usage: penv -g <version>"
+            return 1
+        end
+        echo "Setting global Python version to $argv[2]..."
+        pyenv global "$argv[2]"
+        return 0
+    end
+
     # --- Env name from arg or current dir ---
     if test -n "$argv[1]"
         set ENV_NAME "$argv[1]_env"
@@ -73,9 +171,44 @@ function penv
     if test -n "$LOCAL_VERSION"
         set PY_VERSION "$LOCAL_VERSION"
     else
-        set PY_VERSION (pyenv global 2>/dev/null | head -n 1; or echo "")
-        if test -z "$PY_VERSION" -o "$PY_VERSION" = "system"
+        # Fetch installed base versions
+        set BASE_VERSIONS (pyenv versions --bare | grep -v '_env$' | grep -E '^[0-9]')
+        set NUM_VERSIONS (count $BASE_VERSIONS)
+        
+        if test $NUM_VERSIONS -eq 0
             set PY_VERSION "3.10.12"
+            echo "⚠️ No base Python versions installed. Defaulting to $PY_VERSION."
+        else if test $NUM_VERSIONS -eq 1
+            set PY_VERSION $BASE_VERSIONS[1]
+        else
+            # Interactive selection only if we need to create it
+            if not pyenv virtualenvs --bare | grep -qx -- "$ENV_NAME"
+                echo "Multiple Python versions found. Which one would you like to use for '$ENV_NAME'?"
+                for i in (seq 1 $NUM_VERSIONS)
+                    echo "  [$i] "$BASE_VERSIONS[$i]
+                end
+                read -P "Select a version (1-$NUM_VERSIONS) [default: global]: " choice
+                
+                if string match -qr '^[0-9]+$' -- "$choice"
+                    if test "$choice" -ge 1 -a "$choice" -le "$NUM_VERSIONS"
+                        set PY_VERSION $BASE_VERSIONS[$choice]
+                    else
+                        set PY_VERSION (pyenv global 2>/dev/null | head -n 1; or echo "")
+                        if test -z "$PY_VERSION" -o "$PY_VERSION" = "system"
+                            set PY_VERSION $BASE_VERSIONS[1]
+                        end
+                        echo "Using default: $PY_VERSION"
+                    end
+                else
+                    set PY_VERSION (pyenv global 2>/dev/null | head -n 1; or echo "")
+                    if test -z "$PY_VERSION" -o "$PY_VERSION" = "system"
+                        set PY_VERSION $BASE_VERSIONS[1]
+                    end
+                    echo "Using default: $PY_VERSION"
+                end
+            else
+                set PY_VERSION (pyenv global 2>/dev/null | head -n 1; or echo "")
+            end
         end
     end
 
