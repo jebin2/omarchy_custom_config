@@ -76,7 +76,7 @@ if [ -f "$LOCAL_CUSTOM_RC" ]; then
     cp "$LOCAL_CUSTOM_RC" "$CUSTOM_RC"
 else
     echo ">>> Downloading custom_bashrc from GitHub..."
-    curl -fsSL "https://raw.githubusercontent.com/jebin2/omarchy_custom_config/main/custom_bashrc" -o "$CUSTOM_RC"
+    curl -fsSL "https://raw.githubusercontent.com/jebin2/omarchy_custom_config/main/custom_bashrc?t=$(date +%s)" -o "$CUSTOM_RC"
 fi
 
 # ----------------------------
@@ -107,7 +107,7 @@ if [ "$IS_FISH" = true ]; then
             echo "✔ Installed $f -> $FISH_FUNCTIONS_DIR/$f"
         else
             echo ">>> Downloading $f from GitHub..."
-            curl -fsSL "https://raw.githubusercontent.com/jebin2/omarchy_custom_config/main/$f" -o "$FISH_FUNCTIONS_DIR/$f"
+            curl -fsSL "https://raw.githubusercontent.com/jebin2/omarchy_custom_config/main/$f?t=$(date +%s)" -o "$FISH_FUNCTIONS_DIR/$f"
             echo "✔ Installed $f -> $FISH_FUNCTIONS_DIR/$f"
         fi
     done

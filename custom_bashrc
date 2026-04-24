@@ -20,7 +20,7 @@ penv() {
       return 1
     fi
     ENV_NAME="${2}_env"
-    if pyenv virtualenvs --bare | grep -qx "$ENV_NAME"; then
+    if pyenv virtualenvs --bare | grep -qx -- "$ENV_NAME"; then
       read -p "Are you sure you want to delete '$ENV_NAME'? (y/n) " -n 1 -r
       echo
       if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -68,7 +68,7 @@ penv() {
   fi
 
   # --- Create env if missing ---
-  if ! pyenv virtualenvs --bare | grep -qx "$ENV_NAME"; then
+  if ! pyenv virtualenvs --bare | grep -qx -- "$ENV_NAME"; then
     echo "Creating new environment '$ENV_NAME' with Python $PY_VERSION"
     pyenv virtualenv "$PY_VERSION" "$ENV_NAME"
   else
