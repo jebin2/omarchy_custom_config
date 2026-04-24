@@ -1,12 +1,21 @@
 #!/bin/bash
 set -e
 
-PYTHON_VERSION="3.10.12"
+DEFAULT_PYTHON_VERSION="3.10.12"
+read -p "Enter Python version to install [$DEFAULT_PYTHON_VERSION]: " input_version
+PYTHON_VERSION="${input_version:-$DEFAULT_PYTHON_VERSION}"
 PYENV_DIR="$HOME/.pyenv"
 
 CUSTOM_RC="$HOME/.custom_bashrc"
 LOCAL_CUSTOM_RC="./custom_bashrc"
-BASHRC="$HOME/.bashrc"
+# Detect shell configuration file
+if echo "$SHELL" | grep -q "zsh"; then
+    SHELL_RC="$HOME/.zshrc"
+elif [ "$(uname -s)" = "Darwin" ] && echo "$SHELL" | grep -q "bash"; then
+    SHELL_RC="$HOME/.bash_profile"
+else
+    SHELL_RC="$HOME/.bashrc"
+fi
 
 # Detect if fish is the default shell
 FISH_CONFIG="$HOME/.config/fish/config.fish"
@@ -18,7 +27,13 @@ fi
 
 echo ">>> Detecting OS..."
 
-if command -v pacman >/dev/null 2>&1; then
+if [ "$(uname -s)" = "Darwin" ]; then
+    OS="macos"
+    if ! command -v brew >/dev/null 2>&1; then
+        echo "❌ Homebrew is required on macOS. Please install it first."
+        exit 1
+    fi
+elif command -v pacman >/dev/null 2>&1; then
     OS="arch"
 elif command -v apt >/dev/null 2>&1; then
     OS="ubuntu"
@@ -47,6 +62,10 @@ elif [ "$OS" = "ubuntu" ]; then
         libreadline-dev libsqlite3-dev \
         libffi-dev liblzma-dev tk-dev \
         xz-utils
+
+elif [ "$OS" = "macos" ]; then
+    brew update
+    brew install openssl readline sqlite3 xz zlib tcl-tk
 fi
 
 # ----------------------------
@@ -60,18 +79,18 @@ else
 fi
 
 # ----------------------------
-# Ensure .bashrc sources .custom_bashrc
+# Ensure shell profile sources .custom_bashrc
 # ----------------------------
-echo ">>> Ensuring ~/.custom_bashrc is sourced in ~/.bashrc..."
+echo ">>> Ensuring ~/.custom_bashrc is sourced in $SHELL_RC..."
 
-if ! grep -q 'source ~/.custom_bashrc' "$BASHRC" 2>/dev/null; then
-    cat << 'EOF' >> "$BASHRC"
+if ! grep -q 'source ~/.custom_bashrc' "$SHELL_RC" 2>/dev/null; then
+    cat << 'EOF' >> "$SHELL_RC"
 
 # Load custom bash config
 [ -f ~/.custom_bashrc ] && source ~/.custom_bashrc
 EOF
 else
-    echo "✔ ~/.custom_bashrc already sourced"
+    echo "✔ ~/.custom_bashrc already sourced in $SHELL_RC"
 fi
 
 # ----------------------------
@@ -140,6 +159,7 @@ fi
 # <<< pyenv setup <<<
 
 EOF
+    touch "$CUSTOM_RC"
     cat /tmp/pyenv_setup.txt "$CUSTOM_RC" > "$CUSTOM_RC.tmp" && mv "$CUSTOM_RC.tmp" "$CUSTOM_RC"
     fi
 fi

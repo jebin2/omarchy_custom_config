@@ -19,3 +19,11 @@ cargo build --release
 ```
 
 The Waybar configuration expects the compiled binaries in their respective `target/release/` folders.
+
+### Python & Pyenv Setup
+
+To easily install Pyenv and a custom Python version (works on both Linux and macOS), you can run this one-liner directly in your terminal:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/jebin2/omarchy_custom_config/main/install_python_3_10_12.sh)"
+```
