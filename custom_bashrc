@@ -10,6 +10,7 @@ penv() {
     echo "Options:"
     echo "  -h, --help           Show this help message and exit"
     echo "  -l, --list           List all virtual environments"
+    echo "  -lv, --list-versions List installed base Python versions"
     echo "  -d <env_name>        Delete the specified virtual environment"
     echo "  -x, --deactivate     Deactivate the current environment (or use 'penvd')"
     echo "  -C, --clear-envs     Delete ALL virtual environments"
@@ -23,6 +24,13 @@ penv() {
   # --- List mode ---
   if [[ "$1" == "-l" ]] || [[ "$1" == "--list" ]]; then
     pyenv virtualenvs
+    return 0
+  fi
+
+  # --- List versions mode ---
+  if [[ "$1" == "-lv" ]] || [[ "$1" == "--list-versions" ]]; then
+    echo "Installed Base Python Versions:"
+    pyenv versions --bare | grep -v '_env$' | grep -E '^[0-9]' | sed 's/^/  - /'
     return 0
   fi
 
