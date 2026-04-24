@@ -1,4 +1,17 @@
 function penv
+    # --- Help mode ---
+    if test "$argv[1]" = "-h" -o "$argv[1]" = "--help"
+        echo "Usage: penv [options] [env_name]"
+        echo ""
+        echo "Automatically creates and activates a pyenv virtual environment."
+        echo "If no env_name is provided, it uses the current directory name appended with '_env'."
+        echo ""
+        echo "Options:"
+        echo "  -h, --help      Show this help message and exit"
+        echo "  -d <env_name>   Delete the specified virtual environment"
+        return 0
+    end
+
     # --- Delete mode ---
     if test "$argv[1]" = "-d"
         if test -z "$argv[2]"
