@@ -7,6 +7,7 @@ if command -v pyenv >/dev/null; then
 fi
 # <<< pyenv setup <<<
 
+setopt PROMPT_SUBST
 
 penv() {
   # --- Help mode ---
@@ -57,7 +58,7 @@ penv() {
     fi
     local ENV_NAME="${2}_env"
     if pyenv virtualenvs --bare | grep -qx -- "$ENV_NAME"; then
-      read -p "Are you sure you want to delete '$ENV_NAME'? (y/n) " -n 1 -r
+      read "REPLY?Are you sure you want to delete '$ENV_NAME'? (y/n) "
       echo
       if [[ $REPLY =~ ^[Yy]$ ]]; then
         pyenv uninstall -f "$ENV_NAME"
@@ -81,11 +82,10 @@ penv() {
         return 1
       fi
     fi
-    # If the user specified an env without _env, check if we should append it
     if [[ ! "$ENV_TO_SET" =~ _env$ ]] && ! pyenv virtualenvs --bare | grep -qx -- "$ENV_TO_SET"; then
-       if pyenv virtualenvs --bare | grep -qx -- "${ENV_TO_SET}_env"; then
-           ENV_TO_SET="${ENV_TO_SET}_env"
-       fi
+      if pyenv virtualenvs --bare | grep -qx -- "${ENV_TO_SET}_env"; then
+        ENV_TO_SET="${ENV_TO_SET}_env"
+      fi
     fi
     echo "Setting local pyenv version to '$ENV_TO_SET' in current directory..."
     pyenv local "$ENV_TO_SET"
@@ -102,10 +102,10 @@ penv() {
     fi
     echo "The following virtual environments will be DELETED:"
     echo "$ENVS" | sed 's/^/  - /'
-    read -p "Are you sure? (y/n) " -n 1 -r
+    read "REPLY?Are you sure? (y/n) "
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-      for env in $ENVS; do
+      for env in ${(f)ENVS}; do
         pyenv uninstall -f "$env"
       done
       echo "✅ All virtual environments deleted."
@@ -124,10 +124,10 @@ penv() {
     fi
     echo "The following base Python versions will be DELETED:"
     echo "$VERSIONS" | sed 's/^/  - /'
-    read -p "Are you sure? (y/n) " -n 1 -r
+    read "REPLY?Are you sure? (y/n) "
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-      for ver in $VERSIONS; do
+      for ver in ${(f)VERSIONS}; do
         pyenv uninstall -f "$ver"
       done
       echo "✅ All base Python versions deleted."
@@ -186,36 +186,33 @@ penv() {
   if [ -n "$LOCAL_VERSION" ]; then
     PY_VERSION="$LOCAL_VERSION"
   else
-    # Fetch installed base versions
-    local BASE_VERSIONS=($(pyenv versions --bare | grep -v '_env$' | grep -E '^[0-9]'))
+    local BASE_VERSIONS=(${(f)"$(pyenv versions --bare | grep -v '_env$' | grep -E '^[0-9]')"})
     local NUM_VERSIONS=${#BASE_VERSIONS[@]}
-    
+
     if [ $NUM_VERSIONS -eq 0 ]; then
       PY_VERSION="3.10.12"
       echo "⚠️ No base Python versions installed. Defaulting to $PY_VERSION."
     elif [ $NUM_VERSIONS -eq 1 ]; then
-      PY_VERSION="${BASE_VERSIONS[0]}"
+      PY_VERSION="${BASE_VERSIONS[1]}"
     else
-      # Interactive selection only if we need to create it
       if ! pyenv virtualenvs --bare | grep -qx -- "$ENV_NAME"; then
         echo "Multiple Python versions found. Which one would you like to use for '$ENV_NAME'?"
-        for i in "${!BASE_VERSIONS[@]}"; do
-          echo "  [$((i+1))] ${BASE_VERSIONS[$i]}"
+        for i in {1..$NUM_VERSIONS}; do
+          echo "  [$i] ${BASE_VERSIONS[$i]}"
         done
         local choice
-        read -p "Select a version (1-$NUM_VERSIONS) [default: global]: " choice
+        read "choice?Select a version (1-$NUM_VERSIONS) [default: global]: "
 
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$NUM_VERSIONS" ]; then
-          PY_VERSION="${BASE_VERSIONS[$((choice-1))]}"
+          PY_VERSION="${BASE_VERSIONS[$choice]}"
         else
           PY_VERSION=$(pyenv global 2>/dev/null | head -n 1)
           if [ -z "$PY_VERSION" ] || [ "$PY_VERSION" = "system" ]; then
-            PY_VERSION="${BASE_VERSIONS[0]}"
+            PY_VERSION="${BASE_VERSIONS[1]}"
           fi
           echo "Using default: $PY_VERSION"
         fi
       else
-        # If env already exists, PY_VERSION won't be used anyway, just pick global
         PY_VERSION=$(pyenv global 2>/dev/null | head -n 1)
       fi
     fi
@@ -224,7 +221,6 @@ penv() {
   # --- Create env ---
   if ! pyenv virtualenvs --bare | grep -qx -- "$ENV_NAME"; then
     echo "Creating new environment '$ENV_NAME' with Python $PY_VERSION"
-
     if ! pyenv virtualenv "$PY_VERSION" "$ENV_NAME"; then
       echo "❌ Failed to create virtual environment"
       return 1
@@ -256,12 +252,13 @@ penvd() {
 
 
 set_env_and_title() {
-  local RESET="\[\e[0m\]"
-  local GREEN="\[\e[32m\]"
-  local BLUE="\[\e[34m\]"
-  local CYAN="\[\e[36m\]"
-  local YELLOW="\[\e[33m\]"
-  local env_name env_plain branch branch_plain dir dir_plain branch_val
+  local RESET="%{\e[0m%}"
+  local GREEN="%{\e[32m%}"
+  local BLUE="%{\e[34m%}"
+  local CYAN="%{\e[36m%}"
+  local YELLOW="%{\e[33m%}"
+
+  local env_name env_plain branch branch_plain dir dir_plain
 
   if [[ -n "$VIRTUAL_ENV" ]]; then
     env_name="${GREEN}(${VIRTUAL_ENV##*/})${RESET} "
@@ -274,6 +271,7 @@ set_env_and_title() {
   branch=""
   branch_plain=""
   if command -v git &>/dev/null; then
+    local branch_val
     branch_val=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
     if [[ -n "$branch_val" ]]; then
       branch=" ${YELLOW}${branch_val}${RESET}"
@@ -284,12 +282,12 @@ set_env_and_title() {
   dir="${BLUE}${PWD##*/}${RESET}"
   dir_plain="${PWD##*/}"
 
-  PS1="${env_name}${dir}${branch} ${CYAN}❯ ${RESET}"
+  PROMPT="${env_name}${dir}${branch} ${CYAN}❯ ${RESET}"
   echo -ne "\033]0;${env_plain}${dir_plain}${branch_plain}\007"
 }
 
-if [[ "$PROMPT_COMMAND" != *"set_env_and_title"* ]]; then
-  PROMPT_COMMAND="set_env_and_title${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+if (( ! ${precmd_functions[(Ie)set_env_and_title]} )); then
+  precmd_functions+=(set_env_and_title)
 fi
 
 
